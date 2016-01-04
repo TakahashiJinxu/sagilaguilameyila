@@ -26,6 +26,7 @@ void main()
 	int EveryStage=200;
 	int No_1=1485;
 	int No_2=1484;  //此处应赋初值，编号从0开始
+	int nBstep=10;
 	int* Re_seq=new int [NumOfImage];
 	for(int i=0;i<NumOfImage;i++)
 	{
@@ -64,7 +65,7 @@ void main()
 	fclose(fpExterior);
 	//////////////////////////////////////////////
 	FILE* fpRight;
-	fpRight=fopen("F:\\killkillkill3720\\SelectedCoordinates_New6.txt","r");
+	fpRight=fopen("F:\\killkillkill3720\\SelectedCoordinates_New7.txt","r");
 //	fpRight=fopen("F:\\SelectedCoordinates_New6.txt","r");
 //	fpRight=fopen("F:\\MoniData.txt","r");
 	CorresPoint** puredPoints=new CorresPoint* [NumOfImage*NumOfImage];
@@ -136,6 +137,7 @@ void main()
 			}
 		}
 	}
+	int nperB=int(nEles/nBstep)+1;
 
 	std::vector<Trip> mBtripletList;
 	std::vector<Trip> mBPtripletList;
@@ -538,29 +540,29 @@ void main()
 			smBPB+=psmBPB[u];
 			psmBPB[u].setZero();
 		}
-		smB.setFromTriplets(mBtripletList.begin(),mBtripletList.end());
-//		smBP.setFromTriplets(mBP2tripletList.begin(),mBP2tripletList.end());
-//		smBP.setFromTriplets(mBPtripletList.begin(),mBPtripletList.end());
-		smB.makeCompressed();
-//		smBP.makeCompressed();
-//		smBPB2=smBP.transpose()*smBP;
+	
 		svL.setFromTriplets(vL.begin(),vL.end());
-//		svBPL=smBP.transpose()*svL;
-//		dvBPL=svBPL;
-//		smBPB3=smBPB-smBPB2;
 		superSolver3.compute(smBPB);
 		smBPB.setZero();
 		Eigen::VectorXd vX =superSolver3.solve(dvBPL);
 		dvBPL.setZero();
-//	    linearSolver.compute(smBPB);
-//		Eigen::VectorXd vX = dmBPB.lu().solve(dvBPL);
+		svV.setZero();
 		for(int i=0;i<nCols;i++)
 		{
 			mXtripletList.emplace_back(i,0,vX[i]);
 		}
 		svX.setFromTriplets(mXtripletList.begin(),mXtripletList.end());
-		svV=smB*svX-svL; //改成smB
-		dvV=svV;
+		for(int u=0;u<nBstep-1;u++)
+		{
+			smB.setFromTriplets(mBtripletList.begin()+u*nperB,mBtripletList.begin()+(u+1)*nperB);
+			smB.makeCompressed();
+			svV+=smB*svX;
+		}
+		smB.setFromTriplets(mBtripletList.begin()+(nBstep-1)*nperB,mBtripletList.end());
+	    smB.makeCompressed();
+		svV+=smB*svX;
+		svV-=svL; //改成smB
+    	dvV=svV;
 		mXtripletList.clear();
 		vL.clear();
 //		Eigen::VectorXd vX;
@@ -617,7 +619,7 @@ void main()
 			method=CV_SVD_SYM;
 		cvInvert(mBTB,mInv_BTB,CV_SVD_SYM);
 		cvGEMM(mInv_BTB,mBTL,1,NULL,0,mX);*/
-		sprintf(X_str,"F:\\killkillkill3720\\XbyStep4\\X%d.txt",interator);
+		sprintf(X_str,"F:\\killkillkill3720\\XbyStep2\\X%d.txt",interator);
 		fpX=fopen(X_str,"w");
 		fprintf(fpX,"%d\n",interator);
 		for(int y=0;y<vX.size();y++)
