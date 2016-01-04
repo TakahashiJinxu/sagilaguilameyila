@@ -27,6 +27,7 @@ void main()
 	int No_1=1485;
 	int No_2=1484;  //此处应赋初值，编号从0开始
 	int nBstep=10;
+	int rowh,colh;
 	int* Re_seq=new int [NumOfImage];
 	for(int i=0;i<NumOfImage;i++)
 	{
@@ -152,13 +153,14 @@ void main()
 //	Eigen::SparseMatrix<double> smBPB_d2(nCols,nCols);
 //	Eigen::SparseMatrix<double> smInv_BPB(nCols,nCols);
 //	Eigen::VectorXd vL(nRows);
-	std::vector<Trip> vL;
+//	std::vector<Trip> vL;
 	Eigen::SparseMatrix<double> svL(nRows,1);
 	Eigen::SparseMatrix<double> svV(nRows,1);
 	Eigen::SparseMatrix<double> svX(nCols,1);
 	Eigen::SparseVector<double> svBPL;
 	Eigen::VectorXd dvBPL(nCols);
-	Eigen::MatrixXd dvV(nRows,1);
+	Eigen::VectorXd dvV(nRows);
+//	Eigen::VectorXd dvL(nRows);
 	Eigen::SparseMatrix<double>* psmBPB=new Eigen::SparseMatrix<double> [StageNum];
 	for(int i=0;i<StageNum;i++)
 	{
@@ -228,7 +230,6 @@ void main()
 	//	mBPtripletList.clear();
 		mBtripletList.reserve(nEles);
 	//	mBPtripletList.reserve(nEles);
-	    vL.reserve(nRows);
 		cRows=0;
 		for(int i=0;i<NumOfImage;i++)
 	    {
@@ -488,7 +489,7 @@ void main()
 	//						mBP2tripletList.emplace_back(cRows,6*j+4,F_kappa2*sqrt(arr_p[cRows]));
 							Fs[11]=F_kappa2*sqrt(arr_p[cRows]);
 						}
-						vL.emplace_back(cRows,0,F1);
+			            dvV[cRows]=-F1;
 						for(int l=0;l<12;l++)
 						{
 							for(int o=0;o<12;o++)
@@ -540,8 +541,6 @@ void main()
 			smBPB+=psmBPB[u];
 			psmBPB[u].setZero();
 		}
-	
-		svL.setFromTriplets(vL.begin(),vL.end());
 		superSolver3.compute(smBPB);
 		smBPB.setZero();
 		Eigen::VectorXd vX =superSolver3.solve(dvBPL);
@@ -551,20 +550,13 @@ void main()
 		{
 			mXtripletList.emplace_back(i,0,vX[i]);
 		}
-		svX.setFromTriplets(mXtripletList.begin(),mXtripletList.end());
-		for(int u=0;u<nBstep-1;u++)
+		for(int i=0;i<mBtripletList.size();i++)
 		{
-			smB.setFromTriplets(mBtripletList.begin()+u*nperB,mBtripletList.begin()+(u+1)*nperB);
-			smB.makeCompressed();
-			svV+=smB*svX;
+			rowh=mBtripletList[i].row();
+			colh=mBtripletList[i].col();
+			dvV[rowh]+=mBtripletList[i].value()*vX[colh];
 		}
-		smB.setFromTriplets(mBtripletList.begin()+(nBstep-1)*nperB,mBtripletList.end());
-	    smB.makeCompressed();
-		svV+=smB*svX;
-		svV-=svL; //改成smB
-    	dvV=svV;
 		mXtripletList.clear();
-		vL.clear();
 //		Eigen::VectorXd vX;
 		//检测矩阵输入是否正确
 		if(cRows==nRows)printf("Right!\n");
