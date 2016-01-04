@@ -10,10 +10,7 @@ struct CorresPoint
 	double y1;
 	double x2;
 	double y2;
-	int row1;
-	int col1;
-	int row2;
-	int col2;
+	int crow;
 };
 typedef Eigen::Triplet<double> Trip;
 void Calculate_Matrix_R(CvMat* R,double fai,double omiga,double kappa);
@@ -138,18 +135,28 @@ void main()
 			}
 		}
 	}
+	int cRows=0;
+	for(int i=0;i<NumOfImage;i++)
+	{
+		for(int j=0;j<NumOfImage;j++)
+		{
+			for(int k=0;k<PureMatchNum[i*NumOfImage+j];k++)
+			{
+				puredPoints[i*NumOfImage+j][k].crow=cRows;
+				cRows++;
+			}
+		}
+	}
 	int nperB=int(nEles/nBstep)+1;
 
 	std::vector<Trip> mBtripletList;
-	std::vector<Trip> mBPtripletList;
-	std::vector<Trip> mBP2tripletList;
+//	std::vector<Trip> mBP2tripletList;
 	std::vector<Trip> mXtripletList;
-	Eigen::SparseMatrix<double> smB(nRows,nCols);
+//	Eigen::SparseMatrix<double> smB(nRows,nCols);
 //	Eigen::SparseMatrix<double> smBP(nRows,nCols);
 	Eigen::SparseMatrix<double> smBPB(nCols,nCols);
 //	Eigen::SparseMatrix<double> smBPB2(nCols,nCols);
 //	Eigen::SparseMatrix<double> smBPB3(nCols,nCols);
-	Eigen::SparseMatrix<double> smBPB_d(nCols,nCols);
 //	Eigen::SparseMatrix<double> smBPB_d2(nCols,nCols);
 //	Eigen::SparseMatrix<double> smInv_BPB(nCols,nCols);
 //	Eigen::VectorXd vL(nRows);
@@ -180,21 +187,11 @@ void main()
 //	CvMat* mBTB=cvCreateMat(nCols,nCols,CV_32FC1);
 //	CvMat* mInv_BTB=cvCreateMat(nCols,nCols,CV_32FC1);
 //	CvMat* mBTL=cvCreateMat(nCols,1,CV_32FC1);
-	CvMat* mF0=cvCreateMat(3,3,CV_32FC1);
-	CvMat* mF_fai1=cvCreateMat(3,3,CV_32FC1);
-	CvMat* mF_omiga1=cvCreateMat(3,3,CV_32FC1);
-	CvMat* mF_kappa1=cvCreateMat(3,3,CV_32FC1);
-	CvMat* mF_fai2=cvCreateMat(3,3,CV_32FC1);
-	CvMat* mF_omiga2=cvCreateMat(3,3,CV_32FC1);
-	CvMat* mF_kappa2=cvCreateMat(3,3,CV_32FC1);
-	CvMat* mR1=cvCreateMat(3,3,CV_32FC1);
-	CvMat* mR2=cvCreateMat(3,3,CV_32FC1);
+
 //	CvMat* mBP=cvCreateMat(nRows,nCols,CV_32FC1);
 //	CvMat* mVTV=cvCreateMat(1,1,CV_32FC1);
-	int cRows=0;
-	double X1,Y1,Z1,X2,Y2,Z2;
-	double x1,y1,x2,y2,f1,f2;
-	double F0,F_fai1,F_omiga1,F_kappa1,F_fai2,F_omiga2,F_kappa2,F_Xs1,F_Ys1,F_Zs1,F_Xs2,F_Ys2,F_Zs2;
+	
+	
 	double BLength;
 	double vtpv;
 	int interator=0;
@@ -207,7 +204,7 @@ void main()
 	{
 		dvBPL[i]=0;
 	}
-	while(!stop&&interator<15)
+	while(!stop&&interator<30)
 	{
 		interator++;
 		if(interator>3)
@@ -230,14 +227,29 @@ void main()
 	//	mBPtripletList.clear();
 		mBtripletList.reserve(nEles);
 	//	mBPtripletList.reserve(nEles);
-		cRows=0;
+#pragma omp parallel for	private(cRows,BLength)
 		for(int i=0;i<NumOfImage;i++)
 	    {
 		    printf("%d\n",i);
+		   CvMat* mF0=cvCreateMat(3,3,CV_32FC1);
+	       CvMat* mF_fai1=cvCreateMat(3,3,CV_32FC1);
+	       CvMat* mF_omiga1=cvCreateMat(3,3,CV_32FC1);
+	       CvMat* mF_kappa1=cvCreateMat(3,3,CV_32FC1);
+	       CvMat* mF_fai2=cvCreateMat(3,3,CV_32FC1);
+	       CvMat* mF_omiga2=cvCreateMat(3,3,CV_32FC1);
+	       CvMat* mF_kappa2=cvCreateMat(3,3,CV_32FC1);
+	       CvMat* mR1=cvCreateMat(3,3,CV_32FC1);
+	       CvMat* mR2=cvCreateMat(3,3,CV_32FC1);
+		   Eigen::SparseMatrix<double> smBPB_d(nCols,nCols);
+		   std::vector<Trip> mBPtripletList;
+		   double X1,Y1,Z1,X2,Y2,Z2;
+	       double x1,y1,x2,y2,f1,f2;
+	       double F0,F_fai1,F_omiga1,F_kappa1,F_fai2,F_omiga2,F_kappa2,F_Xs1,F_Ys1,F_Zs1,F_Xs2,F_Ys2,F_Zs2;
 			for(int j=0;j<NumOfImage;j++)
 		    {
 			  
 				if(PureMatchNum[i*NumOfImage+j]==0)continue;
+
 				int* Indexs=new int [12];
 				double* kernels=new double [12*12];
 				double* Fs=new double [12];
@@ -291,7 +303,8 @@ void main()
 				BLength=sqrt(pow(arr_Xs[j]-arr_Xs[i],2)+pow(arr_Ys[j]-arr_Ys[i],2)+pow(arr_Zs[j]-arr_Zs[i],2));
 				for(int k=0;k<PureMatchNum[i*NumOfImage+j];k++)
 			    {
-					   double F1;
+					   cRows=puredPoints[i*NumOfImage+j][k].crow;
+					    double F1;
 					    mBPtripletList.reserve(12);
 					    x1=puredPoints[i*NumOfImage+j][k].x1;
 						y1=puredPoints[i*NumOfImage+j][k].y1;
@@ -391,102 +404,96 @@ void main()
 						//¹¹Ôì¾ØÕóB
 						if(i<NumOfImage-2)
 						{
-							//cvSetReal2D(mB,cRows,6*i,F_Xs1);
+							#pragma omp critical
 							mBtripletList.emplace_back(cRows,6*i,F_Xs1);
-//							mBP2tripletList.emplace_back(cRows,6*i,F_Xs1*sqrt(arr_p[cRows]));
 							Fs[0]=F_Xs1*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*i+1,F_Ys1);
+							#pragma omp critical
 							mBtripletList.emplace_back(cRows,6*i+1,F_Ys1);
-//							mBP2tripletList.emplace_back(cRows,6*i+1,F_Ys1*sqrt(arr_p[cRows]));
 							Fs[1]=F_Ys1*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*i+2,F_Zs1);
+							#pragma omp critical
 							mBtripletList.emplace_back(cRows,6*i+2,F_Zs1);
-//							mBP2tripletList.emplace_back(cRows,6*i+2,F_Zs1*sqrt(arr_p[cRows]));
 							Fs[2]=F_Zs1*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*i+3,F_fai1);
+							#pragma omp critical
 							mBtripletList.emplace_back(cRows,6*i+3,F_fai1);
-//							mBP2tripletList.emplace_back(cRows,6*i+3,F_fai1*sqrt(arr_p[cRows]));
 							Fs[3]=F_fai1*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*i+4,F_omiga1);
+							#pragma omp critical
 							mBtripletList.emplace_back(cRows,6*i+4,F_omiga1);
-//							mBP2tripletList.emplace_back(cRows,6*i+4,F_omiga1*sqrt(arr_p[cRows]));
 							Fs[4]=F_omiga1*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*i+5,F_kappa1);
+							#pragma omp critical
 							mBtripletList.emplace_back(cRows,6*i+5,F_kappa1);
-//							mBP2tripletList.emplace_back(cRows,6*i+5,F_kappa1*sqrt(arr_p[cRows]));
 							Fs[5]=F_kappa1*sqrt(arr_p[cRows]);
 						}
 						else if(i==NumOfImage-2)
 						{
-							//cvSetReal2D(mB,cRows,6*i,F_Ys1);
+							#pragma omp critical
 							mBtripletList.emplace_back(cRows,6*i,F_Ys1);
-//							mBP2tripletList.emplace_back(cRows,6*i,F_Ys1*sqrt(arr_p[cRows]));
 							Fs[1]=F_Ys1*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*i+1,F_Zs1);
+							#pragma omp critical
 							mBtripletList.emplace_back(cRows,6*i+1,F_Zs1);
-//							mBP2tripletList.emplace_back(cRows,6*i+1,F_Zs1*sqrt(arr_p[cRows]));
 							Fs[2]=F_Zs1*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*i+2,F_fai1);
+							#pragma omp critical
 							mBtripletList.emplace_back(cRows,6*i+2,F_fai1);
-//							mBP2tripletList.emplace_back(cRows,6*i+2,F_fai1*sqrt(arr_p[cRows]));
 							Fs[3]=F_fai1*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*i+3,F_omiga1);
+							#pragma omp critical
 							mBtripletList.emplace_back(cRows,6*i+3,F_omiga1);
-//							mBP2tripletList.emplace_back(cRows,6*i+3,F_omiga1*sqrt(arr_p[cRows]));
 							Fs[4]=F_omiga1*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*i+4,F_kappa1);
+							#pragma omp critical
 							mBtripletList.emplace_back(cRows,6*i+4,F_kappa1);
-//							mBP2tripletList.emplace_back(cRows,6*i+4,F_kappa1*sqrt(arr_p[cRows]));
+
 							Fs[5]=F_kappa1*sqrt(arr_p[cRows]);
 						}
 						if(j<NumOfImage-2)
 						{
-							//cvSetReal2D(mB,cRows,6*j,F_Xs2);
+							#pragma omp critical
 							mBtripletList.emplace_back(cRows,6*j,F_Xs2);
-							//mBP2tripletList.emplace_back(cRows,6*j,F_Xs2*sqrt(arr_p[cRows]));
+
 							Fs[6]=F_Xs2*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*j+1,F_Ys2);
+							#pragma omp critical
 							mBtripletList.emplace_back(cRows,6*j+1,F_Ys2);
-							//mBP2tripletList.emplace_back(cRows,6*j+1,F_Ys2*sqrt(arr_p[cRows]));
+
 							Fs[7]=F_Ys2*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*j+2,F_Zs2);
+	                       #pragma omp critical
 							mBtripletList.emplace_back(cRows,6*j+2,F_Zs2);
-							//mBP2tripletList.emplace_back(cRows,6*j+2,F_Zs2*sqrt(arr_p[cRows]));
+		
 							Fs[8]=F_Zs2*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*j+3,F_fai2);
+							#pragma omp critical
 							mBtripletList.emplace_back(cRows,6*j+3,F_fai2);
-							//mBP2tripletList.emplace_back(cRows,6*j+3,F_fai2*sqrt(arr_p[cRows]));
+	
 							Fs[9]=F_fai2*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*j+4,F_omiga2);
+							#pragma omp critical
 							mBtripletList.emplace_back(cRows,6*j+4,F_omiga2);
-							//mBP2tripletList.emplace_back(cRows,6*j+4,F_omiga2*sqrt(arr_p[cRows]));
+
 							Fs[10]=F_omiga2*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*j+5,F_kappa2);
+							#pragma omp critical
 							mBtripletList.emplace_back(cRows,6*j+5,F_kappa2);
-							//mBP2tripletList.emplace_back(cRows,6*j+5,F_kappa2*sqrt(arr_p[cRows]));
+
 							Fs[11]=F_kappa2*sqrt(arr_p[cRows]);
 						}
 						else if(j==NumOfImage-2)
 						{
-							//cvSetReal2D(mB,cRows,6*j,F_Ys2);
+							#pragma omp critical
 							mBtripletList.emplace_back(cRows,6*j,F_Ys2);
-//							mBP2tripletList.emplace_back(cRows,6*j,F_Ys2*sqrt(arr_p[cRows]));
+
 							Fs[7]=F_Ys2*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*j+1,F_Zs2);
+
+							#pragma omp critical
 							mBtripletList.emplace_back(cRows,6*j+1,F_Zs2);
-//							mBP2tripletList.emplace_back(cRows,6*j+1,F_Zs2*sqrt(arr_p[cRows]));
+
 							Fs[8]=F_Zs2*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*j+2,F_fai2);
+
+							#pragma omp critical
 							mBtripletList.emplace_back(cRows,6*j+2,F_fai2);
-//							mBP2tripletList.emplace_back(cRows,6*j+2,F_fai2*sqrt(arr_p[cRows]));
+					
 							Fs[9]=F_fai2*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*j+3,F_omiga2);
+				
+							#pragma omp critical
 							mBtripletList.emplace_back(cRows,6*j+3,F_omiga2);
-//							mBP2tripletList.emplace_back(cRows,6*j+3,F_omiga2*sqrt(arr_p[cRows]));
+
 							Fs[10]=F_omiga2*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*j+4,F_kappa2);
+	
+							#pragma omp critical
 							mBtripletList.emplace_back(cRows,6*j+4,F_kappa2);
-	//						mBP2tripletList.emplace_back(cRows,6*j+4,F_kappa2*sqrt(arr_p[cRows]));
+	
 							Fs[11]=F_kappa2*sqrt(arr_p[cRows]);
 						}
 			            dvV[cRows]=-F1;
@@ -515,26 +522,44 @@ void main()
 							p=1;
 				            arr_p[cRows]=p;
 						}*/
-						cRows++;
 					
 				}
 				for(int l=0;l<12;l++)
 				{
 					if(Indexs[l]!=-1)
-					dvBPL[Indexs[l]]=dvBPL[Indexs[l]]+Ls[l];
+					{
+						#pragma omp critical
+						dvBPL[Indexs[l]]=dvBPL[Indexs[l]]+Ls[l];
+					}
 					for(int o=0;o<12;o++)
 					{
 						if(Indexs[l]!=-1&&Indexs[o]!=-1)
 						{
+							#pragma omp critical
 							mBPtripletList.emplace_back(Indexs[l],Indexs[o],kernels[l*12+o]);
 						}
 					}
 				}
 				smBPB_d.setFromTriplets(mBPtripletList.begin(),mBPtripletList.end());
 				mBPtripletList.clear();
+#pragma omp critical
 				psmBPB[i/EveryStage]+=smBPB_d;
 //				smBPB3=smBPB-smBPB2;
+				delete [] kernels;
+				delete [] Fs;
+				delete [] Ls;
+				delete [] Indexs;
 			}
+			cvReleaseMat(&mF0);
+			cvReleaseMat(&mF_fai1);
+			cvReleaseMat(&mF_omiga1);
+			cvReleaseMat(&mF_kappa1);
+			cvReleaseMat(&mF_fai2);
+			cvReleaseMat(&mF_omiga2);
+			cvReleaseMat(&mF_kappa2);
+			cvReleaseMat(&mR1);
+			cvReleaseMat(&mR2);
+			mBPtripletList.clear();
 		}
 		for(int u=0;u<StageNum;u++)
 		{
@@ -611,7 +636,7 @@ void main()
 			method=CV_SVD_SYM;
 		cvInvert(mBTB,mInv_BTB,CV_SVD_SYM);
 		cvGEMM(mInv_BTB,mBTL,1,NULL,0,mX);*/
-		sprintf(X_str,"F:\\killkillkill3720\\XbyStep2\\X%d.txt",interator);
+		sprintf(X_str,"F:\\killkillkill3720\\XbyStep5\\X%d.txt",interator);
 		fpX=fopen(X_str,"w");
 		fprintf(fpX,"%d\n",interator);
 		for(int y=0;y<vX.size();y++)
@@ -646,7 +671,7 @@ void main()
 		//arr_kappa[NumOfImage-2]+=cvGetReal2D(mX,6*(NumOfImage-2)+4,0);
 		arr_kappa[NumOfImage-2]+=vX[6*(NumOfImage-2)+4];
 		FILE* fpExterior2;
-	   fpExterior2=fopen("F:\\killkillkill3720\\Generated_Exterior_Elements2.txt","w");
+	   fpExterior2=fopen("F:\\killkillkill3720\\Generated_Exterior_Elementsomp2.txt","w");
 	   for(int i=0;i<NumOfImage;i++)
 	  {
 		    fprintf(fpExterior2,"%lf\t%lf\t%lf\t%lf\t%lf\t%lf\t%lf\n",arr_Xs[i],arr_Ys[i],arr_Zs[i],arr_fai[i],arr_omiga[i],arr_kappa[i],arr_f[i]);
@@ -693,7 +718,7 @@ void main()
 	fclose(fpmX);*/
 	
 	FILE* fpL;
-	fpL=fopen("C:\\Matlabfiles\\L7.txt","w");
+	fpL=fopen("C:\\Matlabfiles\\L9.txt","w");
 	
 	Eigen::MatrixXd dvL(nRows,1);
 	dvL=svL;
@@ -703,7 +728,7 @@ void main()
 	}
 	fclose(fpL);
 	FILE* fpL2;
-	fpL2=fopen("C:\\Matlabfiles\\L8.txt","w");
+	fpL2=fopen("C:\\Matlabfiles\\L10.txt","w");
 	for(int i=0;i<GoodPhotos.size();i++)
 	{
 	    fprintf(fpL2,"%lf\n",dvL(GoodPhotos[i],0));
