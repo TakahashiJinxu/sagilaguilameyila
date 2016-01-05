@@ -4,6 +4,7 @@
 #include<Eigen/Dense>
 #include "Eigen/CholmodSupport"
 #include "Eigen/UmfPackSupport"
+#define INTERATION_NUM 15
 struct CorresPoint
 {
 	double x1;
@@ -17,12 +18,12 @@ void Calculate_Matrix_R(CvMat* R,double fai,double omiga,double kappa);
 void xyz2XYZ(CvMat* R,double x,double y,double z,double* X,double* Y,double* Z);
 void main()
 {
-	omp_set_num_threads(8);
+	omp_set_num_threads(4);
 	char X_str[1024];
-	int NumOfImage=2885;
+	int NumOfImage=339;
 	int EveryStage=200;
-	int No_1=1485;
-	int No_2=1484;  //此处应赋初值，编号从0开始
+	int No_1=195;
+	int No_2=194;  //此处应赋初值，编号从0开始
 	int nBstep=10;
 	int rowh,colh;
 	int* Re_seq=new int [NumOfImage];
@@ -39,6 +40,8 @@ void main()
 	double p;
 	FILE* fpB;
 	FILE* fpX;
+    FILE* fpL;
+	fpL=fopen("C:\\Matlabfiles\\L9.txt","w");
 	double* Weight=new double [NumOfImage*NumOfImage];
 	double WeightSD=200;
 	double WeightDD=100;
@@ -53,8 +56,8 @@ void main()
 	double* arr_kappa=new double [NumOfImage];
 	double* arr_f=new double [NumOfImage];
 	FILE* fpExterior;
-	fpExterior=fopen("E:\\killkillkill3720\\Generated_Exterior_Elements10.txt","r");
-//	fpExterior=fopen("E:\\Generated_Exterior_Elements2.txt","r");
+//	fpExterior=fopen("E:\\killkillkill3720\\Generated_Exterior_Elements10.txt","r");
+	fpExterior=fopen("E:\\Generated_Exterior_Elements2.txt","r");
 //	fpExterior=fopen("F:\\Double.txt","r");
 	for(int i=0;i<NumOfImage;i++)
 	{
@@ -63,8 +66,9 @@ void main()
 	fclose(fpExterior);
 	//////////////////////////////////////////////
 	FILE* fpRight;
-	fpRight=fopen("F:\\killkillkill3720\\SelectedCoordinates_New7.txt","r");
+//	fpRight=fopen("F:\\killkillkill3720\\SelectedCoordinates_New7.txt","r");
 //	fpRight=fopen("F:\\SelectedCoordinates_New6.txt","r");
+	fpRight=fopen("E:\\killkillkill3720\\SelectedCoordinates_New7.txt","r");
 //	fpRight=fopen("F:\\MoniData.txt","r");
 	CorresPoint** puredPoints=new CorresPoint* [NumOfImage*NumOfImage];
 	int* PureMatchNum=new int [NumOfImage*NumOfImage];
@@ -204,9 +208,10 @@ void main()
 	{
 		dvBPL[i]=0;
 	}
-	while(!stop&&interator<30)
+	while(!stop&&interator<INTERATION_NUM)
 	{
 		interator++;
+
 		if(interator>3)
 		{
 			for(int i=0;i<nRows;i++)
@@ -404,97 +409,71 @@ void main()
 						//构造矩阵B
 						if(i<NumOfImage-2)
 						{
-							#pragma omp critical
-							mBtripletList.emplace_back(cRows,6*i,F_Xs1);
+							#pragma omp critical (evalB)
+							{
+								mBtripletList.emplace_back(cRows,6*i,F_Xs1);
+								mBtripletList.emplace_back(cRows,6*i+1,F_Ys1);
+								mBtripletList.emplace_back(cRows,6*i+2,F_Zs1);
+								mBtripletList.emplace_back(cRows,6*i+3,F_fai1);
+								mBtripletList.emplace_back(cRows,6*i+4,F_omiga1);
+								mBtripletList.emplace_back(cRows,6*i+5,F_kappa1);
+							}
 							Fs[0]=F_Xs1*sqrt(arr_p[cRows]);
-							#pragma omp critical
-							mBtripletList.emplace_back(cRows,6*i+1,F_Ys1);
 							Fs[1]=F_Ys1*sqrt(arr_p[cRows]);
-							#pragma omp critical
-							mBtripletList.emplace_back(cRows,6*i+2,F_Zs1);
-							Fs[2]=F_Zs1*sqrt(arr_p[cRows]);
-							#pragma omp critical
-							mBtripletList.emplace_back(cRows,6*i+3,F_fai1);
+							Fs[2]=F_Zs1*sqrt(arr_p[cRows]);						
 							Fs[3]=F_fai1*sqrt(arr_p[cRows]);
-							#pragma omp critical
-							mBtripletList.emplace_back(cRows,6*i+4,F_omiga1);
-							Fs[4]=F_omiga1*sqrt(arr_p[cRows]);
-							#pragma omp critical
-							mBtripletList.emplace_back(cRows,6*i+5,F_kappa1);
+							Fs[4]=F_omiga1*sqrt(arr_p[cRows]);	
 							Fs[5]=F_kappa1*sqrt(arr_p[cRows]);
 						}
 						else if(i==NumOfImage-2)
 						{
-							#pragma omp critical
-							mBtripletList.emplace_back(cRows,6*i,F_Ys1);
-							Fs[1]=F_Ys1*sqrt(arr_p[cRows]);
-							#pragma omp critical
-							mBtripletList.emplace_back(cRows,6*i+1,F_Zs1);
-							Fs[2]=F_Zs1*sqrt(arr_p[cRows]);
-							#pragma omp critical
-							mBtripletList.emplace_back(cRows,6*i+2,F_fai1);
-							Fs[3]=F_fai1*sqrt(arr_p[cRows]);
-							#pragma omp critical
-							mBtripletList.emplace_back(cRows,6*i+3,F_omiga1);
+							#pragma omp critical (evalB)
+							{
+								mBtripletList.emplace_back(cRows,6*i,F_Ys1);
+								mBtripletList.emplace_back(cRows,6*i+1,F_Zs1);
+								mBtripletList.emplace_back(cRows,6*i+2,F_fai1);
+								mBtripletList.emplace_back(cRows,6*i+3,F_omiga1);
+								mBtripletList.emplace_back(cRows,6*i+4,F_kappa1);
+							}
+							Fs[1]=F_Ys1*sqrt(arr_p[cRows]);							
+							Fs[2]=F_Zs1*sqrt(arr_p[cRows]);						
+							Fs[3]=F_fai1*sqrt(arr_p[cRows]);						
 							Fs[4]=F_omiga1*sqrt(arr_p[cRows]);
-							#pragma omp critical
-							mBtripletList.emplace_back(cRows,6*i+4,F_kappa1);
-
 							Fs[5]=F_kappa1*sqrt(arr_p[cRows]);
 						}
 						if(j<NumOfImage-2)
 						{
-							#pragma omp critical
-							mBtripletList.emplace_back(cRows,6*j,F_Xs2);
-
+							#pragma omp critical (evalB)
+							{
+								mBtripletList.emplace_back(cRows,6*j,F_Xs2);
+								mBtripletList.emplace_back(cRows,6*j+1,F_Ys2);
+								mBtripletList.emplace_back(cRows,6*j+2,F_Zs2);
+								mBtripletList.emplace_back(cRows,6*j+3,F_fai2);
+								mBtripletList.emplace_back(cRows,6*j+4,F_omiga2);
+								mBtripletList.emplace_back(cRows,6*j+5,F_kappa2);
+							}
 							Fs[6]=F_Xs2*sqrt(arr_p[cRows]);
-							#pragma omp critical
-							mBtripletList.emplace_back(cRows,6*j+1,F_Ys2);
-
 							Fs[7]=F_Ys2*sqrt(arr_p[cRows]);
-	                       #pragma omp critical
-							mBtripletList.emplace_back(cRows,6*j+2,F_Zs2);
-		
 							Fs[8]=F_Zs2*sqrt(arr_p[cRows]);
-							#pragma omp critical
-							mBtripletList.emplace_back(cRows,6*j+3,F_fai2);
-	
 							Fs[9]=F_fai2*sqrt(arr_p[cRows]);
-							#pragma omp critical
-							mBtripletList.emplace_back(cRows,6*j+4,F_omiga2);
-
 							Fs[10]=F_omiga2*sqrt(arr_p[cRows]);
-							#pragma omp critical
-							mBtripletList.emplace_back(cRows,6*j+5,F_kappa2);
-
 							Fs[11]=F_kappa2*sqrt(arr_p[cRows]);
 						}
 						else if(j==NumOfImage-2)
 						{
-							#pragma omp critical
-							mBtripletList.emplace_back(cRows,6*j,F_Ys2);
-
+							#pragma omp critical (evalB)
+							{
+								mBtripletList.emplace_back(cRows,6*j,F_Ys2);
+								mBtripletList.emplace_back(cRows,6*j+1,F_Zs2);
+								mBtripletList.emplace_back(cRows,6*j+2,F_fai2);
+								mBtripletList.emplace_back(cRows,6*j+3,F_omiga2);
+								mBtripletList.emplace_back(cRows,6*j+4,F_kappa2);
+							}
 							Fs[7]=F_Ys2*sqrt(arr_p[cRows]);
-
-							#pragma omp critical
-							mBtripletList.emplace_back(cRows,6*j+1,F_Zs2);
-
 							Fs[8]=F_Zs2*sqrt(arr_p[cRows]);
-
-							#pragma omp critical
-							mBtripletList.emplace_back(cRows,6*j+2,F_fai2);
-					
 							Fs[9]=F_fai2*sqrt(arr_p[cRows]);
-				
-							#pragma omp critical
-							mBtripletList.emplace_back(cRows,6*j+3,F_omiga2);
-
 							Fs[10]=F_omiga2*sqrt(arr_p[cRows]);
-	
-							#pragma omp critical
-							mBtripletList.emplace_back(cRows,6*j+4,F_kappa2);
-	
-							Fs[11]=F_kappa2*sqrt(arr_p[cRows]);
+		        			Fs[11]=F_kappa2*sqrt(arr_p[cRows]);
 						}
 			            dvV[cRows]=-F1;
 						for(int l=0;l<12;l++)
@@ -528,23 +507,22 @@ void main()
 				{
 					if(Indexs[l]!=-1)
 					{
-						#pragma omp critical
+						#pragma omp critical (evalBPL)
 						dvBPL[Indexs[l]]=dvBPL[Indexs[l]]+Ls[l];
 					}
 					for(int o=0;o<12;o++)
 					{
 						if(Indexs[l]!=-1&&Indexs[o]!=-1)
 						{
-							#pragma omp critical
+							#pragma omp critical (evalBPB)
 							mBPtripletList.emplace_back(Indexs[l],Indexs[o],kernels[l*12+o]);
 						}
 					}
 				}
 				smBPB_d.setFromTriplets(mBPtripletList.begin(),mBPtripletList.end());
 				mBPtripletList.clear();
-#pragma omp critical
+#pragma omp critical (sumBPB)
 				psmBPB[i/EveryStage]+=smBPB_d;
-//				smBPB3=smBPB-smBPB2;
 				delete [] kernels;
 				delete [] Fs;
 				delete [] Ls;
@@ -569,6 +547,23 @@ void main()
 		superSolver3.compute(smBPB);
 		smBPB.setZero();
 		Eigen::VectorXd vX =superSolver3.solve(dvBPL);
+		stop=true;
+		for(int i=0;i<NumOfImage-2;i++)
+		{
+			if(fabs(vX[6*i+3])>0.00005)
+			stop=false;
+			if(fabs(vX[6*i+4])>0.00005)
+			stop=false;
+			if(fabs(vX[6*i+5])>0.00005)
+			stop=false;
+		}
+		if(stop==true||interator==INTERATION_NUM)
+		{
+			   for(int i=0;i<nRows;i++)
+				{
+					fprintf(fpL,"%lf\n",-dvV(i,0));
+				}
+		}
 		dvBPL.setZero();
 		svV.setZero();
 		for(int i=0;i<nCols;i++)
@@ -685,16 +680,7 @@ void main()
 		}
 		//cvGEMM(mV,mV,1,NULL,0,mVTV,CV_GEMM_A_T);
 		sigma0=sqrt(vtpv/(nRows-nCols));
-		stop=true;
-		for(int i=0;i<NumOfImage-2;i++)
-		{
-			if(fabs(vX[6*i+3])>0.00005)
-			stop=false;
-			if(fabs(vX[6*i+4])>0.00005)
-			stop=false;
-			if(fabs(vX[6*i+5])>0.00005)
-			stop=false;
-		}
+		
 		/*if(fabs(cvGetReal2D(mX,6*(NumOfImage-2)+2,0))>0.00005)
 			stop=false;
 		if(fabs(cvGetReal2D(mX,6*(NumOfImage-2)+3,0))>0.00005)
@@ -716,24 +702,8 @@ void main()
 		fprintf(fpmX,"%e\n",mi);
 	}
 	fclose(fpmX);*/
-	
-	FILE* fpL;
-	fpL=fopen("C:\\Matlabfiles\\L9.txt","w");
-	
-	Eigen::MatrixXd dvL(nRows,1);
-	dvL=svL;
-	for(int i=0;i<nRows;i++)
-	{
-	    fprintf(fpL,"%lf\n",dvL(i,0));
-	}
 	fclose(fpL);
-	FILE* fpL2;
-	fpL2=fopen("C:\\Matlabfiles\\L10.txt","w");
-	for(int i=0;i<GoodPhotos.size();i++)
-	{
-	    fprintf(fpL2,"%lf\n",dvL(GoodPhotos[i],0));
-	}
-	fclose(fpL2);
+
 	cvWaitKey(0);
 }
 void Calculate_Matrix_R(CvMat* R,double fai,double omiga,double kappa)
