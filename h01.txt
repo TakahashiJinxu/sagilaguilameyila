@@ -1,721 +1,1041 @@
 #include<opencv.hpp>
-#include<omp.h>
-#include<Eigen/Sparse>
-#include<Eigen/Dense>
-#include "Eigen/CholmodSupport"
-#include "Eigen/UmfPackSupport"
+#include<vector>
+#define PI 3.141592654
+#define MAXVALUE 10000
+#define MINVALUE -10000
+using namespace cv;
+using namespace std;
+struct Camfiles
+{
+	int CamIndex;
+	int StripIndex;
+	int PhotoIndex;
+	int ImgIndex;
+	char* filename;
+};
 struct CorresPoint
 {
 	double x1;
 	double y1;
 	double x2;
 	double y2;
+	double X;
+	double Y;
+	double Z;
 	int row1;
 	int col1;
 	int row2;
 	int col2;
+	int index1;
+	int index2;
+	int indexi;
+	int indexj;
+	int value;
+	int overlap;
+	bool banned;
 };
-typedef Eigen::Triplet<double> Trip;
+struct Camera
+{
+	double cellsize;
+	double f;
+	double xp;
+	double yp;
+	double k1,k2,k3;
+	double p1,p2;
+};
+struct IpsOfOp
+{
+	int i;
+	int j;
+	int k;
+};
+void Interior_Orientation(Camfiles* camfile,CorresPoint** CorresCoordinate,int* MatchNum,int NumOfCam,int NumOfImage,Camera* cams,int* ImageIndex,char** arr_Str1);
 void Calculate_Matrix_R(CvMat* R,double fai,double omiga,double kappa);
 void xyz2XYZ(CvMat* R,double x,double y,double z,double* X,double* Y,double* Z);
+void Purify10000(CorresPoint** CorresCoordinate,int* MatchNum,int* RealMatchNum,int NumOfImage);
+void Floyed(int* coGraph,int* coDistance,int NumOfImage);
+bool FindIsland(int* coGraph,int* coDistance,int NumOfImage,int* Islandnote,int *pIslandNum);
+void ObjectSpacePoint(int indexi,int indexj,int indexk,int value,int NumOfImage,CorresPoint** CorresCoordinate,int* MatchNum);
 void main()
 {
-	omp_set_num_threads(8);
-	char X_str[1024];
-	int NumOfImage=2885;
-	int EveryStage=200;
-	int No_1=1485;
-	int No_2=1484;  //此处应赋初值，编号从0开始
-	int* Re_seq=new int [NumOfImage];
+	//int MinPhotoSeq=21;//从1开始
+	//int MaxPhotoSeq=24;
+	int NumOfCam=5;
+	int NumOfImage=49;
+	int AllNumOfImage=49;
+	//输入照片序号
+	int* ImageIndex=new int [NumOfImage];
+	FILE* fpIn;
+	fpIn=fopen("F:\\ImageIndex.txt","r");
 	for(int i=0;i<NumOfImage;i++)
 	{
-		Re_seq[i]=i;
+		fscanf(fpIn,"%d",&ImageIndex[i]);
 	}
-	Re_seq[No_1]=NumOfImage-1;
-	Re_seq[No_2]=NumOfImage-2;
-	Re_seq[NumOfImage-1]=No_1;
-	Re_seq[NumOfImage-2]=No_2;
-	int StageNum=NumOfImage/EveryStage+1;
-	double sigma0;
-	double p;
-	FILE* fpB;
-	FILE* fpX;
-	double* Weight=new double [NumOfImage*NumOfImage];
-	double WeightSD=200;
-	double WeightDD=100;
-	fpB=fopen("F:\\BTB.txt","w");
-	///////////////////////////////读初值
-	//大程序里焦距的存储方式要改
+	fclose(fpIn);
+	char* sPathFile="F:\\20151102\\visualize\\list.rd.txt";
+	Camfiles* camfile=new Camfiles[NumOfImage];
+	Camfiles* camfile2=new Camfiles[AllNumOfImage];
+	//相机文件路径名
+	for(int i=0;i<AllNumOfImage;i++)
+	{
+		camfile2[i].filename=new char [1024];
+	}
+	FILE* fpPathFile;
+	fpPathFile=fopen(sPathFile,"r");
+	for(int i=0;i<AllNumOfImage;i++)
+	{
+		fscanf(fpPathFile,"%s",camfile2[i].filename);
+	}
+	//航线数、每条航线像片数
+	int StripNum=24;
+	int ImageNumpStrip=31;
+	int hehe;
+	for(int i=0;i<NumOfImage;i++)
+	{
+		sscanf(camfile2[ImageIndex[i]-1].filename,"/home/robot/TestCHN/images/Manu_Select/T05003_Cam%d_%d_TIFF100_001003%dcam%d_100.jpg",&camfile[i].CamIndex,&camfile[i].StripIndex,&camfile[i].PhotoIndex,&hehe);
+		camfile[i].PhotoIndex=camfile[i].PhotoIndex%1000;
+		camfile[i].ImgIndex=(camfile[i].CamIndex-1)*StripNum*ImageNumpStrip+(camfile[i].StripIndex-1)*ImageNumpStrip+camfile[i].PhotoIndex-1;
+		printf("%d\n",camfile[i].ImgIndex);
+	}
+	//
+	CvPoint** MatchIndex=new CvPoint* [NumOfImage*NumOfImage];
+	int* MatchNum=new int [NumOfImage*NumOfImage];
+	int* RealMatchNum=new int [NumOfImage*NumOfImage];
+	int* PureMatchNum=new int [NumOfImage*NumOfImage];
+	CorresPoint** CorresCoordinate=new CorresPoint* [NumOfImage*NumOfImage]; 
+	const char* Matchfilename="F:\\Data\\oblique\\matches.init.txt";
+
+	FILE* fpMatch;
+	fpMatch=fopen(Matchfilename,"r");
+	int imgindex1,imgindex2;
+	int smallindex,largeindex;
+	int Corres_ptsnum;
+	int ptindex1,ptindex2;
+	int reci,recj;
+	double ransac_threshold;
+	bool flag=false;
+	for(int i=0;i<NumOfImage;i++)
+	{
+		for(int j=0;j<NumOfImage;j++)
+		{
+			MatchNum[i*NumOfImage+j]=0;
+			RealMatchNum[i*NumOfImage+j]=0;
+		}
+	}
+	while(!feof(fpMatch))
+	{
+		flag=false;
+		fscanf(fpMatch,"%d%d",&imgindex1,&imgindex2);
+		for(int i=0;i<NumOfImage-1;i++)
+		{
+			for(int j=i+1;j<NumOfImage;j++)
+			{
+				smallindex=MIN(camfile[i].ImgIndex,camfile[j].ImgIndex);
+				largeindex=MAX(camfile[i].ImgIndex,camfile[j].ImgIndex);
+				if(imgindex1==smallindex&&imgindex2==largeindex)
+				{
+					if(camfile[i].ImgIndex==smallindex)
+					{
+						reci=i;
+						recj=j;
+					}
+					else 
+					{
+						reci=j;
+						recj=i;
+					}
+					fscanf(fpMatch,"%d",&Corres_ptsnum);
+					MatchIndex[reci*NumOfImage+recj]=new CvPoint [Corres_ptsnum];
+					CorresCoordinate[reci*NumOfImage+recj]=new CorresPoint[Corres_ptsnum];
+					MatchNum[reci*NumOfImage+recj]=Corres_ptsnum;
+					for(int k=0;k<Corres_ptsnum;k++)
+					{
+						fscanf(fpMatch,"%d%d",&ptindex1,&ptindex2);
+						MatchIndex[reci*NumOfImage+recj][k].x=ptindex1;
+						MatchIndex[reci*NumOfImage+recj][k].y=ptindex2;
+					}
+					flag=true;
+					break;
+				}
+			}
+		}
+		if(!flag)
+		{
+			fscanf(fpMatch,"%d",&Corres_ptsnum);
+			for(int k=0;k<Corres_ptsnum;k++)
+			{
+				fscanf(fpMatch,"%d%d",&ptindex1,&ptindex2);
+			}
+		}
+	}
+	fclose(fpMatch);
+	//显示匹配结果
+	FILE* fpRelations;
+	fpRelations=fopen("E:\\MatchRelations.txt","w");
+	for(int i=0;i<NumOfImage;i++)
+	{
+		for(int j=0;j<NumOfImage;j++)
+		{
+			printf("%5d",MatchNum[i*NumOfImage+j]);
+			fprintf(fpRelations,"%5d",MatchNum[i*NumOfImage+j]);
+		}
+		printf("\n");
+		fprintf(fpRelations,"\n");
+	}
+	fclose(fpRelations);
+	//更改文件路径
+	char** arr_Str1=new char* [NumOfImage];
+	char** arr_Str2=new char* [NumOfImage];
+	for(int i=0;i<NumOfImage;i++)
+	{
+		arr_Str1[i]=new char [1024];
+		arr_Str2[i]=new char [1024];
+		sscanf(camfile2[ImageIndex[i]-1].filename,"/home/robot/TestCHN/images/Manu_Select/%s",arr_Str1[i]);
+		sscanf(arr_Str1[i],"%[^.]",arr_Str2[i]);
+		strcat(arr_Str2[i],".key");
+		strcpy(arr_Str1[i],"F:\\20151102\\Oblique_key\\");
+		strcat(arr_Str1[i],arr_Str2[i]);
+	}
+	FILE* fpCoor;
+	CvPoint2D32f** Corr_Coors=new CvPoint2D32f* [NumOfImage];
+	CvPoint2D32f corrtemp;
+	int* Corres_ptsnumarr=new int [NumOfImage];
+	int Sift_dim;
+	for(int i=0;i<NumOfImage;i++)
+	{
+		fpCoor=fopen(arr_Str1[i],"r");
+		fscanf(fpCoor,"%d",&Corres_ptsnum);
+		fscanf(fpCoor,"%d",&Sift_dim);
+		Corr_Coors[i]=new CvPoint2D32f [Corres_ptsnum];
+		Corres_ptsnumarr[i]=Corres_ptsnum;
+		for(int j=0;j<Corres_ptsnum;j++)
+		{
+			fscanf(fpCoor,"%f%f",&corrtemp.x,&corrtemp.y);
+			Corr_Coors[i][j].x=corrtemp.x;
+			Corr_Coors[i][j].y=corrtemp.y;
+			fscanf(fpCoor,"%f%f",&corrtemp.x,&corrtemp.y);
+			for(int k=0;k<Sift_dim;k++)
+			{
+				fscanf(fpCoor,"%d",&hehe);
+			}
+		}
+		fclose(fpCoor);
+	}
+	for(int i=0;i<NumOfImage;i++)
+	{
+		for(int j=0;j<NumOfImage;j++)
+		{
+			for(int k=0;k<MatchNum[i*NumOfImage+j];k++)
+			{
+				if(MatchIndex[i*NumOfImage+j][k].x<Corres_ptsnumarr[i]&&MatchIndex[i*NumOfImage+j][k].y<Corres_ptsnumarr[j])
+				{
+					CorresCoordinate[i*NumOfImage+j][k].x1=Corr_Coors[i][MatchIndex[i*NumOfImage+j][k].x].x;
+					CorresCoordinate[i*NumOfImage+j][k].y1=Corr_Coors[i][MatchIndex[i*NumOfImage+j][k].x].y;
+					CorresCoordinate[i*NumOfImage+j][k].x2=Corr_Coors[j][MatchIndex[i*NumOfImage+j][k].y].x;
+					CorresCoordinate[i*NumOfImage+j][k].y2=Corr_Coors[j][MatchIndex[i*NumOfImage+j][k].y].y;
+					CorresCoordinate[i*NumOfImage+j][k].index1=MatchIndex[i*NumOfImage+j][k].x;
+					CorresCoordinate[i*NumOfImage+j][k].index2=MatchIndex[i*NumOfImage+j][k].y;
+					CorresCoordinate[i*NumOfImage+j][k].value=-1;
+					RealMatchNum[i*NumOfImage+j]++;
+				}
+				else
+				{
+					CorresCoordinate[i*NumOfImage+j][k].x1=-10000;
+					CorresCoordinate[i*NumOfImage+j][k].y1=-10000;
+					CorresCoordinate[i*NumOfImage+j][k].x2=-10000;
+					CorresCoordinate[i*NumOfImage+j][k].y2=-10000;
+					CorresCoordinate[i*NumOfImage+j][k].value=-1;
+				}
+			}
+		}
+	}
+	///////////////////////////////////////////////////////////////////////////////
+	//显示像点坐标
+	CvFont hfont;
+	cvInitFont(&hfont,CV_FONT_HERSHEY_SIMPLEX,1.0,1.0,0,3,8);
+	char str_left1[1024];
+	char str_right1[1024];
+	char str_left2[1024];
+	char str_right2[1024];
+	char id1[1024];
+	char id2[1024];
+	int i=0;int j=41;
+	if(MatchNum[i*NumOfImage+j]>0)
+	{
+	sprintf(str_left1,"F:\\20151102\\visualize\\%08d.jpg",i);
+	sprintf(str_right1,"F:\\20151102\\visualize\\%08d.jpg",j);
+	IplImage* img2=cvLoadImage(str_left1,3);
+	IplImage* img3=cvLoadImage(str_right1,3);
+	double x1,x2,y1,y2;
+	for(int k=0;k<MatchNum[i*NumOfImage+j];k++)
+	{
+	if(CorresCoordinate[i*NumOfImage+j][k].x1!=-10000)
+	{
+	x1=CorresCoordinate[i*NumOfImage+j][k].x1;
+	y1=CorresCoordinate[i*NumOfImage+j][k].y1;
+	x2=CorresCoordinate[i*NumOfImage+j][k].x2;
+	y2=CorresCoordinate[i*NumOfImage+j][k].y2;
+	cvLine(img2,cvPoint(cvRound(y1)-10,cvRound(x1)),cvPoint(cvRound(y1)+10,cvRound(x1)),CV_RGB(255,0,0),2);
+	cvLine(img2,cvPoint(cvRound(y1),cvRound(x1)-10),cvPoint(cvRound(y1),cvRound(x1)+10),CV_RGB(255,0,0),2);
+	cvLine(img3,cvPoint(cvRound(y2)-10,cvRound(x2)),cvPoint(cvRound(y2)+10,cvRound(x2)),CV_RGB(255,0,0),2);
+	cvLine(img3,cvPoint(cvRound(y2),cvRound(x2)-10),cvPoint(cvRound(y2),cvRound(x2)+10),CV_RGB(255,0,0),2);
+	sprintf(id1,"%d",CorresCoordinate[i*NumOfImage+j][k].index1);
+	sprintf(id2,"%d",CorresCoordinate[i*NumOfImage+j][k].index2);
+	cvPutText(img2,id1,cvPoint(cvRound(y1)-30,cvRound(x1)-30),&hfont,CV_RGB(0,0,0));
+	cvPutText(img3,id2,cvPoint(cvRound(y2)-30,cvRound(x2)-30),&hfont,CV_RGB(0,0,0));
+	}
+	}
+	sprintf(str_left2,"F:\\res2\\_%02d_%02d_left.jpg",i,j);
+	sprintf(str_right2,"F:\\res2\\_%02d_%02d_right.jpg",i,j);
+	cvSaveImage(str_left2,img2);
+	cvSaveImage(str_right2,img3);
+	cvReleaseImage(&img2);
+	cvReleaseImage(&img3);
+	}
+	
+	///////////////////////////////////////////////////////////////////////////////
+	Camera* cams=new Camera [NumOfCam];
+	////////////////////////////将像素坐标转化为像平面坐标
+	Interior_Orientation( camfile, CorresCoordinate, MatchNum, NumOfCam,NumOfImage,cams,ImageIndex,arr_Str1);
+	////////////////////////////
+	///////////////////////////读初值
+	FILE* fpInitial;
+	fpInitial=fopen("F:\\20151102\\pos.txt","r");
 	double* arr_Xs=new double [NumOfImage];
 	double* arr_Ys=new double [NumOfImage];
 	double* arr_Zs=new double [NumOfImage];
 	double* arr_fai=new double [NumOfImage];
 	double* arr_omiga=new double [NumOfImage];
 	double* arr_kappa=new double [NumOfImage];
-	double* arr_f=new double [NumOfImage];
+	double dhehe;
+	char strPhotoNum[1024];
+	double Xs,Ys,Zs,fai,omiga,kappa;
+	int CamIndex,StripIndex,PhotoIndex,ImgIndex;
+	fscanf(fpInitial,"%d",&hehe);
+	while(!feof(fpInitial))
+	{
+		fscanf(fpInitial,"%s",strPhotoNum);
+		fscanf(fpInitial,"%d%lf%lf%lf%lf%lf%lf%lf",&hehe,&Xs,&Ys,&Zs,&fai,&omiga,&kappa,&dhehe);
+		sscanf(strPhotoNum,"CAM%d\\001003%dcam%d_Pro.tif",&CamIndex,&PhotoIndex,&hehe);
+		StripIndex=PhotoIndex/1000;
+		PhotoIndex=PhotoIndex%1000;
+		ImgIndex=(CamIndex-1)*StripNum*ImageNumpStrip+(StripIndex-1)*ImageNumpStrip+PhotoIndex-1;
+		for(int j=0;j<NumOfImage;j++)
+		{
+			if(ImgIndex==camfile[j].ImgIndex)
+			{
+				arr_Xs[j]=Xs;
+				arr_Ys[j]=Ys;
+				arr_Zs[j]=Zs;
+				arr_fai[j]=-fai;
+				arr_omiga[j]=omiga;
+				arr_kappa[j]=kappa;
+			}
+		}
+	}
 	FILE* fpExterior;
-	fpExterior=fopen("E:\\killkillkill3720\\Generated_Exterior_Elements10.txt","r");
-//	fpExterior=fopen("E:\\Generated_Exterior_Elements2.txt","r");
-//	fpExterior=fopen("F:\\Double.txt","r");
+	fpExterior=fopen("E:\\Generated_Exterior_Elements.txt","w");
 	for(int i=0;i<NumOfImage;i++)
 	{
-		fscanf(fpExterior,"%lf\t%lf\t%lf\t%lf\t%lf\t%lf\t%lf\n",&arr_Xs[Re_seq[i]],&arr_Ys[Re_seq[i]],&arr_Zs[Re_seq[i]],&arr_fai[Re_seq[i]],&arr_omiga[Re_seq[i]],&arr_kappa[Re_seq[i]],&arr_f[Re_seq[i]]);
+		fprintf(fpExterior,"%lf\t%lf\t%lf\t%lf\t%lf\t%lf\t%lf\n",arr_Xs[i],arr_Ys[i],arr_Zs[i],arr_fai[i],arr_omiga[i],arr_kappa[i],cams[camfile[i].CamIndex-1].f);
 	}
 	fclose(fpExterior);
-	//////////////////////////////////////////////
-	FILE* fpRight;
-	fpRight=fopen("F:\\killkillkill3720\\SelectedCoordinates_New6.txt","r");
-//	fpRight=fopen("F:\\SelectedCoordinates_New6.txt","r");
-//	fpRight=fopen("F:\\MoniData.txt","r");
-	CorresPoint** puredPoints=new CorresPoint* [NumOfImage*NumOfImage];
-	int* PureMatchNum=new int [NumOfImage*NumOfImage];
-    for(int i=0;i<NumOfImage;i++)
-	{
-		for(int j=0;j<NumOfImage;j++)
-		{
-			PureMatchNum[i*NumOfImage+j]=0;
-		}
-	}
-	int No_left,No_right,matchNum;
-	while(!feof(fpRight))
-	{
-		fscanf(fpRight,"%d%d%d",&No_left,&No_right,&matchNum);
-		PureMatchNum[Re_seq[No_left]*NumOfImage+Re_seq[No_right]]=matchNum;
-		if(matchNum==0)
-			puredPoints[Re_seq[No_left]*NumOfImage+Re_seq[No_right]]=NULL;
-		else
-		puredPoints[Re_seq[No_left]*NumOfImage+Re_seq[No_right]]=new CorresPoint [matchNum];
-		for(int k=0;k<matchNum;k++)
-		{
-			fscanf(fpRight,"%lf",&puredPoints[Re_seq[No_left]*NumOfImage+Re_seq[No_right]][k].x1);
-		}
-		for(int k=0;k<matchNum;k++)
-		{
-			fscanf(fpRight,"%lf",&puredPoints[Re_seq[No_left]*NumOfImage+Re_seq[No_right]][k].y1);
-		}
-		for(int k=0;k<matchNum;k++)
-		{
-			fscanf(fpRight,"%lf",&puredPoints[Re_seq[No_left]*NumOfImage+Re_seq[No_right]][k].x2);
-		}
-		for(int k=0;k<matchNum;k++)
-		{
-			fscanf(fpRight,"%lf",&puredPoints[Re_seq[No_left]*NumOfImage+Re_seq[No_right]][k].y2);
-		}
-		fscanf(fpRight,"\n");
-	}
-	/////////////////////////////////////////////////////////////////////////
-	/////////////////////////////////////////////////////////////////////////
-	int nCols=6*NumOfImage-7;
-	int nRows=0;
-	int nEles=0;
+	//把赋成-10000的错误数据剔掉
+	Purify10000(CorresCoordinate,MatchNum,RealMatchNum,NumOfImage);
+	///////////////////////////剔掉错误数据之后，建立像点与对应地面点的关系
+	//寻找物方点
+	int value=0;
 	for(int i=0;i<NumOfImage;i++)
 	{
 		for(int j=0;j<NumOfImage;j++)
 		{
-			nRows+=PureMatchNum[i*NumOfImage+j];
-			if((i<NumOfImage-2)&&(j<NumOfImage-2))
+			for(int k=0;k<RealMatchNum[i*NumOfImage+j];k++)
 			{
-				nEles+=12*PureMatchNum[i*NumOfImage+j];
-			}
-			else if(((i<NumOfImage-2)&&(j==NumOfImage-2))||((i==NumOfImage-2)&&(j<NumOfImage-2)))
-			{
-				nEles+=11*PureMatchNum[i*NumOfImage+j];
-			}
-			else if(((i<NumOfImage-2)&&(j==NumOfImage-1))||((i==NumOfImage-1)&&(j<NumOfImage-2)))
-			{
-				nEles+=6*PureMatchNum[i*NumOfImage+j];
-			}
-			else if(((i==NumOfImage-2)&&(j==NumOfImage-1))||((i==NumOfImage-1)&&(j==NumOfImage-2)))
-			{
-				nEles+=5*PureMatchNum[i*NumOfImage+j];
-			}
-			else
-			{
-				if(PureMatchNum[i*NumOfImage+j])
-				printf("啊？\n");
+				if(CorresCoordinate[i*NumOfImage+j][k].value==-1)
+				{
+					ObjectSpacePoint(i,j,k,value,NumOfImage,CorresCoordinate,RealMatchNum);
+					value++;
+				}
 			}
 		}
 	}
-
-	std::vector<Trip> mBtripletList;
-	std::vector<Trip> mBPtripletList;
-	std::vector<Trip> mBP2tripletList;
-	std::vector<Trip> mXtripletList;
-	Eigen::SparseMatrix<double> smB(nRows,nCols);
-//	Eigen::SparseMatrix<double> smBP(nRows,nCols);
-	Eigen::SparseMatrix<double> smBPB(nCols,nCols);
-//	Eigen::SparseMatrix<double> smBPB2(nCols,nCols);
-//	Eigen::SparseMatrix<double> smBPB3(nCols,nCols);
-	Eigen::SparseMatrix<double> smBPB_d(nCols,nCols);
-//	Eigen::SparseMatrix<double> smBPB_d2(nCols,nCols);
-//	Eigen::SparseMatrix<double> smInv_BPB(nCols,nCols);
-//	Eigen::VectorXd vL(nRows);
-	std::vector<Trip> vL;
-	Eigen::SparseMatrix<double> svL(nRows,1);
-	Eigen::SparseMatrix<double> svV(nRows,1);
-	Eigen::SparseMatrix<double> svX(nCols,1);
-	Eigen::SparseVector<double> svBPL;
-	Eigen::VectorXd dvBPL(nCols);
-	Eigen::MatrixXd dvV(nRows,1);
-	Eigen::SparseMatrix<double>* psmBPB=new Eigen::SparseMatrix<double> [StageNum];
-	for(int i=0;i<StageNum;i++)
+/*	vector<CorresPoint>* ObjectSpacePoint2=new vector<CorresPoint> [value];
+	for(int i=0;i<NumOfImage;i++)
 	{
-		psmBPB[i].resize(nCols,nCols);
+		for(int j=0;j<NumOfImage;j++)
+		{
+			for(int k=0;k<RealMatchNum[i*NumOfImage+j];k++)
+			{
+				if(CorresCoordinate[i*NumOfImage+j][k].value!=-1)
+				{
+				    ObjectSpacePoint2[CorresCoordinate[i*NumOfImage+j][k].value].push_back(CorresCoordinate[i*NumOfImage+j][k]);
+				}
+			}
+		}
 	}
-/*	for(int i=0;i<NumOfImage;i++)
+	FILE* fpObject;
+	fpObject=fopen("F:\\ObjectSpacePoints.txt","w");
+	fprintf(fpObject,"%d\n",value);
+	for(int i=0;i<value;i++)
 	{
-	    ppsmBPB[i]=new Eigen::SparseMatrix<double>(nCols,nCols) ;
-	}*/
-	std::vector<int> GoodPhotos;
-	double* arr_p=new double [nRows];
-	int method;
-//	CvMat* mB=cvCreateMat(nRows,nCols,CV_32FC1);
-//	CvMat* mL=cvCreateMat(nRows,1,CV_32FC1);
-//	CvMat* mV=cvCreateMat(nRows,1,CV_32FC1);
-//	CvMat* mX=cvCreateMat(nCols,1,CV_32FC1);
-//	CvMat* mBTB=cvCreateMat(nCols,nCols,CV_32FC1);
-//	CvMat* mInv_BTB=cvCreateMat(nCols,nCols,CV_32FC1);
-//	CvMat* mBTL=cvCreateMat(nCols,1,CV_32FC1);
-	CvMat* mF0=cvCreateMat(3,3,CV_32FC1);
-	CvMat* mF_fai1=cvCreateMat(3,3,CV_32FC1);
-	CvMat* mF_omiga1=cvCreateMat(3,3,CV_32FC1);
-	CvMat* mF_kappa1=cvCreateMat(3,3,CV_32FC1);
+		fprintf(fpObject,"%d\t",i);
+		fprintf(fpObject,"%d\t",ObjectSpacePoint2[i].size());
+		for(int j=0;j<ObjectSpacePoint2[i].size();j++)
+		{
+			fprintf(fpObject,"%d\t%d\t",ObjectSpacePoint2[i][j].indexi,ObjectSpacePoint2[i][j].indexj);
+			fprintf(fpObject,"%f\t%f\t%f\t%f\t",ObjectSpacePoint2[i][j].x1,ObjectSpacePoint2[i][j].y1,ObjectSpacePoint2[i][j].x2,ObjectSpacePoint2[i][j].y2);
+		}
+		fprintf(fpObject,"\n");
+	}
+	fclose(fpObject);*/
+	CvMat* msB=cvCreateMat(5,5,CV_32FC1);
+	CvMat* msL=cvCreateMat(5,1,CV_32FC1);
+	CvMat* mR1=cvCreateMat(3,3,CV_32FC1);
+	CvMat* mR2=cvCreateMat(3,3,CV_32FC1);
+	CvMat* msX=cvCreateMat(5,1,CV_32FC1);
 	CvMat* mF_fai2=cvCreateMat(3,3,CV_32FC1);
 	CvMat* mF_omiga2=cvCreateMat(3,3,CV_32FC1);
 	CvMat* mF_kappa2=cvCreateMat(3,3,CV_32FC1);
-	CvMat* mR1=cvCreateMat(3,3,CV_32FC1);
-	CvMat* mR2=cvCreateMat(3,3,CV_32FC1);
-//	CvMat* mBP=cvCreateMat(nRows,nCols,CV_32FC1);
-//	CvMat* mVTV=cvCreateMat(1,1,CV_32FC1);
-	int cRows=0;
-	double X1,Y1,Z1,X2,Y2,Z2;
+	CvMat* mF0=cvCreateMat(3,3,CV_32FC1);
+	CvMat* mB;
+	CvMat* mL;
+    CvMat* mV;
+	int Diedaicishu=200;
+	vector<int>* AllInliers=new vector<int>[Diedaicishu];
+	int* Inlier_num=new int [Diedaicishu];
+	vector<int> Inliers_Chosen;
+	int Ransac_interator=0;
+	int RSCheck_interator=0;
+	double Xs1,Ys1,Zs1,Xs2,Ys2,Zs2;
+	double fai1,omiga1,kappa1,fai2,omiga2,kappa2;
 	double x1,y1,x2,y2,f1,f2;
-	double F0,F_fai1,F_omiga1,F_kappa1,F_fai2,F_omiga2,F_kappa2,F_Xs1,F_Ys1,F_Zs1,F_Xs2,F_Ys2,F_Zs2;
+	double F_Ys2,F_Zs2,F_fai2,F_omiga2,F_kappa2,F0;
 	double BLength;
-	double vtpv;
-	int interator=0;
-	bool stop=false;
-//	Eigen::ConjugateGradient<Eigen::SparseMatrix<double>> linearSolver;
-	Eigen::CholmodSupernodalLLT < Eigen::SparseMatrix < double > > superSolver;
-	Eigen::UmfPackLU < Eigen::SparseMatrix < double > > superSolver2;
-	Eigen::SimplicialLDLT < Eigen::SparseMatrix < double > > superSolver3;
-	for(int i=0;i<nCols;i++)
+	double X1,Y1,Z1,X2,Y2,Z2;
+	int CMaxChoice,IMaxChoice;
+	double Ave_L,Max_L,Ele_L;
+	double dYs,dZs,dfai,domiga,dkappa;
+	FILE* fpPured;
+	fpPured=fopen("E:\\SelectedCoordinates_New2.txt","w");
+	FILE* fpdPured;
+	fpdPured=fopen("E:\\SelectedCoordinates_New2d.txt","w");
+	//////////////////////////////////////////////////////////////
+	//把原始数据输出
+	FILE* fpunPured;
+	fpunPured=fopen("E:\\SelectedCoordinates_1104.txt","w");
+	for(int i=0;i<NumOfImage;i++)
 	{
-		dvBPL[i]=0;
+	for(int j=0;j<NumOfImage;j++)
+	{
+	fprintf(fpunPured,"%d\t%d\t%d\t",i,j,RealMatchNum[i*NumOfImage+j]);
+	for(int k=0;k<RealMatchNum[i*NumOfImage+j];k++)
+	{
+	fprintf(fpunPured,"%lf\t",CorresCoordinate[i*NumOfImage+j][k].x1);
 	}
-	while(!stop&&interator<15)
+	for(int k=0;k<RealMatchNum[i*NumOfImage+j];k++)
 	{
-		interator++;
-		if(interator>3)
+	fprintf(fpunPured,"%lf\t",CorresCoordinate[i*NumOfImage+j][k].y1);
+	}
+	for(int k=0;k<RealMatchNum[i*NumOfImage+j];k++)
+	{
+	fprintf(fpunPured,"%lf\t",CorresCoordinate[i*NumOfImage+j][k].x2);
+	}
+	for(int k=0;k<RealMatchNum[i*NumOfImage+j];k++)
+	{
+	fprintf(fpunPured,"%lf\t",CorresCoordinate[i*NumOfImage+j][k].y2);
+	}
+	fprintf(fpunPured,"\n");
+	}
+	}
+	fclose(fpunPured);
+	//////////////////////////////////////////////////////////////
+	int* coGraph=new int [NumOfImage*NumOfImage];
+	int* coDistance=new int [NumOfImage*NumOfImage];
+	CorresPoint** puredPoints=new CorresPoint* [NumOfImage*NumOfImage]; 
+	for(int i=0;i<NumOfImage;i++)
+	{
+		for(int j=0;j<NumOfImage;j++)
 		{
-			for(int i=0;i<nRows;i++)
+			if(i==j)
 			{
-				p=exp(-0.05*pow(fabs(dvV(i,0))/sigma0,3));
-				arr_p[i]=p;
+				coGraph[i*NumOfImage+j]=0;
+			    coDistance[i*NumOfImage+j]=0;
+			}
+			else
+			{
+			    coGraph[i*NumOfImage+j]=0;
+			    coDistance[i*NumOfImage+j]=MAXVALUE;
 			}
 		}
-		else
+	}
+	FILE* fpCheck;
+	fpCheck=fopen("E:\\CheckRobust.txt","w");
+	for(int No_left=0;No_left<NumOfImage;No_left++)
+	{
+		for(int No_right=0;No_right<NumOfImage;No_right++)
 		{
-			for(int i=0;i<nRows;i++)
+			if(RealMatchNum[No_left*NumOfImage+No_right]<=5)
 			{
-				p=1;
-				arr_p[i]=p;
+				fprintf(fpPured,"%d\t%d\t%d\t\n",No_left,No_right,0);
+				fprintf(fpCheck,"%6d%6d%8d\n",No_left,No_right,0);	
+				continue;
 			}
-		}
-		mBtripletList.clear();
-	//	mBPtripletList.clear();
-		mBtripletList.reserve(nEles);
-	//	mBPtripletList.reserve(nEles);
-	    vL.reserve(nRows);
-		cRows=0;
-		for(int i=0;i<NumOfImage;i++)
-	    {
-		    printf("%d\n",i);
-			for(int j=0;j<NumOfImage;j++)
-		    {
-			  
-				if(PureMatchNum[i*NumOfImage+j]==0)continue;
-				int* Indexs=new int [12];
-				double* kernels=new double [12*12];
-				double* Fs=new double [12];
-				double* Ls=new double [12];
-				for(int k=0;k<12;k++)
+			
+			vector <int> Shulie_ix;
+			for(int i=0;i<RealMatchNum[No_left*NumOfImage+No_right];i++)
+			{
+				Shulie_ix.push_back(i);
+			}
+			if(fabs(arr_fai[No_left]-arr_fai[No_right])<0.2&&fabs(arr_omiga[No_left]-arr_omiga[No_right])<0.2&&fabs(arr_kappa[No_left]-arr_kappa[No_right])<0.2)
+			{
+				ransac_threshold=0.0025;
+			}
+			else
+			{
+				ransac_threshold=0.0025;
+			}
+			for(int i=0;i<Diedaicishu;i++)
+			{
+				random_shuffle(Shulie_ix.begin(),Shulie_ix.end());
+				//Shulie_ix[0]=10;
+				//Shulie_ix[1]=20;
+				//Shulie_ix[2]=30;
+				//Shulie_ix[3]=40;
+				//Shulie_ix[4]=50;
+				Ransac_interator=0;
+				Xs1=arr_Xs[No_left];Ys1=arr_Ys[No_left];Zs1=arr_Zs[No_left];
+				Xs2=arr_Xs[No_right];Ys2=arr_Ys[No_right];Zs2=arr_Zs[No_right];
+				fai1=arr_fai[No_left];omiga1=arr_omiga[No_left];kappa1=arr_kappa[No_left];
+				fai2=arr_fai[No_right];omiga2=arr_omiga[No_right];kappa2=arr_kappa[No_right];
+				f1=cams[camfile[No_left].CamIndex-1].f;
+				f2=cams[camfile[No_right].CamIndex-1].f;
+				while(Ransac_interator<10)
 				{
-					Indexs[k]=-1;
-					Fs[k]=0;
-					Ls[k]=0;
-				}
-				for(int k=0;k<144;k++)
-				{
-					kernels[k]=0;
-				}
-				if(i<NumOfImage-2)
-				{
-					Indexs[0]=6*i;
-					Indexs[1]=6*i+1;
-					Indexs[2]=6*i+2;
-					Indexs[3]=6*i+3;
-					Indexs[4]=6*i+4;
-					Indexs[5]=6*i+5;
-				}
-				else if(i==NumOfImage-2)
-				{
-					Indexs[1]=6*i;
-					Indexs[2]=6*i+1;
-					Indexs[3]=6*i+2;
-					Indexs[4]=6*i+3;
-					Indexs[5]=6*i+4;
-				}
-				if(j<NumOfImage-2)
-				{
-					Indexs[6]=6*j;
-					Indexs[7]=6*j+1;
-					Indexs[8]=6*j+2;
-					Indexs[9]=6*j+3;
-					Indexs[10]=6*j+4;
-					Indexs[11]=6*j+5;
-				}
-				else if(j==NumOfImage-2)
-				{
-					Indexs[7]=6*j;
-					Indexs[8]=6*j+1;
-					Indexs[9]=6*j+2;
-					Indexs[10]=6*j+3;
-					Indexs[11]=6*j+4;
-				}
-				Calculate_Matrix_R(mR1,arr_fai[i],arr_omiga[i],arr_kappa[i]);
-				Calculate_Matrix_R(mR2,arr_fai[j],arr_omiga[j],arr_kappa[j]);
-				BLength=sqrt(pow(arr_Xs[j]-arr_Xs[i],2)+pow(arr_Ys[j]-arr_Ys[i],2)+pow(arr_Zs[j]-arr_Zs[i],2));
-				for(int k=0;k<PureMatchNum[i*NumOfImage+j];k++)
-			    {
-					   double F1;
-					    mBPtripletList.reserve(12);
-					    x1=puredPoints[i*NumOfImage+j][k].x1;
-						y1=puredPoints[i*NumOfImage+j][k].y1;
-						x2=puredPoints[i*NumOfImage+j][k].x2;
-						y2=puredPoints[i*NumOfImage+j][k].y2;
-						f1=arr_f[i];
-						f2=arr_f[j];
+					Ransac_interator+=1;
+					Calculate_Matrix_R(mR1,fai1,omiga1,kappa1);
+					Calculate_Matrix_R(mR2,fai2,omiga2,kappa2);
+					BLength=sqrt(pow(Xs2-Xs1,2)+pow(Ys2-Ys1,2)+pow(Zs2-Zs1,2));
+					for(int k=0;k<5;k++)
+					{
+
+						x1=CorresCoordinate[No_left*NumOfImage+No_right][Shulie_ix[k]].x1;
+						y1=CorresCoordinate[No_left*NumOfImage+No_right][Shulie_ix[k]].y1;
+						x2=CorresCoordinate[No_left*NumOfImage+No_right][Shulie_ix[k]].x2;
+						y2=CorresCoordinate[No_left*NumOfImage+No_right][Shulie_ix[k]].y2;
 						xyz2XYZ(mR1,x1,y1,-f1,&X1,&Y1,&Z1);
 						xyz2XYZ(mR2,x2,y2,-f2,&X2,&Y2,&Z2);
 						//计算F0
-						cvSetReal2D(mF0,0,0,arr_Xs[j]-arr_Xs[i]);
-						cvSetReal2D(mF0,0,1,arr_Ys[j]-arr_Ys[i]);
-						cvSetReal2D(mF0,0,2,arr_Zs[j]-arr_Zs[i]);
+						cvSetReal2D(mF0,0,0,Xs2-Xs1);
+						cvSetReal2D(mF0,0,1,Ys2-Ys1);
+						cvSetReal2D(mF0,0,2,Zs2-Zs1);
 						cvSetReal2D(mF0,1,0,X1);
 						cvSetReal2D(mF0,1,1,Y1);
 						cvSetReal2D(mF0,1,2,Z1);
 						cvSetReal2D(mF0,2,0,X2);
 						cvSetReal2D(mF0,2,1,Y2);
 						cvSetReal2D(mF0,2,2,Z2);
-						F0=cvDet(mF0)/((X1*Z2-X2*Z1)*sqrt(pow(arr_Xs[j]-arr_Xs[i],2)+pow(arr_Ys[j]-arr_Ys[i],2)+pow(arr_Zs[j]-arr_Zs[i],2)));
-						F1=F0;
-						F0=F0*sqrt(arr_p[cRows]);
-						//计算对fai1的偏导
-						cvSetReal2D(mF_fai1,0,0,arr_Xs[j]-arr_Xs[i]);
-						cvSetReal2D(mF_fai1,0,1,arr_Ys[j]-arr_Ys[i]);
-						cvSetReal2D(mF_fai1,0,2,arr_Zs[j]-arr_Zs[i]);
-						cvSetReal2D(mF_fai1,1,0,-Z1);
-						cvSetReal2D(mF_fai1,1,1,0);
-						cvSetReal2D(mF_fai1,1,2,X1);
-						cvSetReal2D(mF_fai1,2,0,X2);
-						cvSetReal2D(mF_fai1,2,1,Y2);
-						cvSetReal2D(mF_fai1,2,2,Z2);
-						F_fai1=-cvDet(mF_fai1)/((X1*Z2-X2*Z1)*sqrt(pow(arr_Xs[j]-arr_Xs[i],2)+pow(arr_Ys[j]-arr_Ys[i],2)+pow(arr_Zs[j]-arr_Zs[i],2)))+(cvDet(mF0)*(-X1*X2-Z1*Z2))/(BLength*(X1*Z2-X2*Z1)*(X1*Z2-X2*Z1));
-						//计算对omiga1的偏导
-						cvSetReal2D(mF_omiga1,0,0,arr_Xs[j]-arr_Xs[i]);
-						cvSetReal2D(mF_omiga1,0,1,arr_Ys[j]-arr_Ys[i]);
-						cvSetReal2D(mF_omiga1,0,2,arr_Zs[j]-arr_Zs[i]);
-						cvSetReal2D(mF_omiga1,1,0,-Y1*sin(arr_fai[i]));
-						cvSetReal2D(mF_omiga1,1,1,X1*sin(arr_fai[i])-Z1*cos(arr_fai[i]));
-						cvSetReal2D(mF_omiga1,1,2,Y1*cos(arr_fai[i]));
-						cvSetReal2D(mF_omiga1,2,0,X2);
-						cvSetReal2D(mF_omiga1,2,1,Y2);
-						cvSetReal2D(mF_omiga1,2,2,Z2);
-						F_omiga1=-cvDet(mF_omiga1)/((X1*Z2-X2*Z1)*sqrt(pow(arr_Xs[j]-arr_Xs[i],2)+pow(arr_Ys[j]-arr_Ys[i],2)+pow(arr_Zs[j]-arr_Zs[i],2)))+(cvDet(mF0)*(-Y1*Z2*sin(arr_fai[i])-Y1*X2*cos(arr_fai[i])))/(BLength*(X1*Z2-X2*Z1)*(X1*Z2-X2*Z1));
-						//计算对kappa1的偏导
-						cvSetReal2D(mF_kappa1,0,0,arr_Xs[j]-arr_Xs[i]);
-						cvSetReal2D(mF_kappa1,0,1,arr_Ys[j]-arr_Ys[i]);
-						cvSetReal2D(mF_kappa1,0,2,arr_Zs[j]-arr_Zs[i]);
-						cvSetReal2D(mF_kappa1,1,0,-Y1*cos(arr_fai[i])*cos(arr_omiga[i])-Z1*sin(arr_omiga[i]));
-						cvSetReal2D(mF_kappa1,1,1,X1*cos(arr_fai[i])*cos(arr_omiga[i])+Z1*sin(arr_fai[i])*cos(arr_omiga[i]));
-						cvSetReal2D(mF_kappa1,1,2,X1*sin(arr_omiga[i])-Y1*sin(arr_fai[i])*cos(arr_omiga[i]));
-						cvSetReal2D(mF_kappa1,2,0,X2);
-						cvSetReal2D(mF_kappa1,2,1,Y2);
-						cvSetReal2D(mF_kappa1,2,2,Z2);
-						F_kappa1=-cvDet(mF_kappa1)/((X1*Z2-X2*Z1)*sqrt(pow(arr_Xs[j]-arr_Xs[i],2)+pow(arr_Ys[j]-arr_Ys[i],2)+pow(arr_Zs[j]-arr_Zs[i],2)))+(cvDet(mF0)*(-Y1*Z2*cos(arr_fai[i])*cos(arr_omiga[i])-Z1*Z2*sin(arr_omiga[i])-X1*X2*sin(arr_omiga[i])+X2*Y1*sin(arr_fai[i])*cos(arr_omiga[i])))/(BLength*(X1*Z2-X2*Z1)*(X1*Z2-X2*Z1));
+						F0=cvDet(mF0)/((X1*Z2-X2*Z1)*sqrt(pow(Xs2-Xs1,2)+pow(Ys2-Ys1,2)+pow(Zs2-Zs1,2)));
+						//计算F_Ys2,F_Zs2
+						F_Ys2=1/sqrt(pow(Xs2-Xs1,2)+pow(Ys2-Ys1,2)+pow(Zs2-Zs1,2))+(cvDet(mF0)*(Ys2-Ys1))/((X1*Z2-X2*Z1)*pow(BLength,3));
+						F_Zs2=-(X1*Y2-X2*Y1)/((X1*Z2-X2*Z1)*sqrt(pow(Xs2-Xs1,2)+pow(Ys2-Ys1,2)+pow(Zs2-Zs1,2)))+(cvDet(mF0)*(Zs2-Zs1))/((X1*Z2-X2*Z1)*pow(BLength,3));
 						//计算对fai2的偏导
-						cvSetReal2D(mF_fai2,0,0,arr_Xs[j]-arr_Xs[i]);
-						cvSetReal2D(mF_fai2,0,1,arr_Ys[j]-arr_Ys[i]);
-						cvSetReal2D(mF_fai2,0,2,arr_Zs[j]-arr_Zs[i]);
+						cvSetReal2D(mF_fai2,0,0,Xs2-Xs1);
+						cvSetReal2D(mF_fai2,0,1,Ys2-Ys1);
+						cvSetReal2D(mF_fai2,0,2,Zs2-Zs1);
 						cvSetReal2D(mF_fai2,1,0,X1);
 						cvSetReal2D(mF_fai2,1,1,Y1);
 						cvSetReal2D(mF_fai2,1,2,Z1);
 						cvSetReal2D(mF_fai2,2,0,-Z2);
 						cvSetReal2D(mF_fai2,2,1,0);
 						cvSetReal2D(mF_fai2,2,2,X2);
-						F_fai2=-cvDet(mF_fai2)/((X1*Z2-X2*Z1)*sqrt(pow(arr_Xs[j]-arr_Xs[i],2)+pow(arr_Ys[j]-arr_Ys[i],2)+pow(arr_Zs[j]-arr_Zs[i],2)))+(cvDet(mF0)*(X1*X2+Z1*Z2))/(BLength*(X1*Z2-X2*Z1)*(X1*Z2-X2*Z1));
+						F_fai2=-cvDet(mF_fai2)/((X1*Z2-X2*Z1)*sqrt(pow(Xs2-Xs1,2)+pow(Ys2-Ys1,2)+pow(Zs2-Zs1,2)))+(cvDet(mF0)*(X1*X2+Z1*Z2))/(BLength*(X1*Z2-X2*Z1)*(X1*Z2-X2*Z1));
 						//计算对omiga2的偏导
-						cvSetReal2D(mF_omiga2,0,0,arr_Xs[j]-arr_Xs[i]);
-						cvSetReal2D(mF_omiga2,0,1,arr_Ys[j]-arr_Ys[i]);
-						cvSetReal2D(mF_omiga2,0,2,arr_Zs[j]-arr_Zs[i]);
+						cvSetReal2D(mF_omiga2,0,0,Xs2-Xs1);
+						cvSetReal2D(mF_omiga2,0,1,Ys2-Ys1);
+						cvSetReal2D(mF_omiga2,0,2,Zs2-Zs1);
 						cvSetReal2D(mF_omiga2,1,0,X1);
 						cvSetReal2D(mF_omiga2,1,1,Y1);
 						cvSetReal2D(mF_omiga2,1,2,Z1);
-						cvSetReal2D(mF_omiga2,2,0,-Y2*sin(arr_fai[j]));
-						cvSetReal2D(mF_omiga2,2,1,X2*sin(arr_fai[j])-Z2*cos(arr_fai[j]));
-						cvSetReal2D(mF_omiga2,2,2,Y2*cos(arr_fai[j]));
-						F_omiga2=-cvDet(mF_omiga2)/((X1*Z2-X2*Z1)*sqrt(pow(arr_Xs[j]-arr_Xs[i],2)+pow(arr_Ys[j]-arr_Ys[i],2)+pow(arr_Zs[j]-arr_Zs[i],2)))+(cvDet(mF0)*(X1*Y2*cos(arr_fai[j])+Z1*Y2*sin(arr_fai[j])))/(BLength*(X1*Z2-X2*Z1)*(X1*Z2-X2*Z1));
+						cvSetReal2D(mF_omiga2,2,0,-Y2*sin(fai2));
+						cvSetReal2D(mF_omiga2,2,1,X2*sin(fai2)-Z2*cos(fai2));
+						cvSetReal2D(mF_omiga2,2,2,Y2*cos(fai2));
+						F_omiga2=-cvDet(mF_omiga2)/((X1*Z2-X2*Z1)*sqrt(pow(Xs2-Xs1,2)+pow(Ys2-Ys1,2)+pow(Zs2-Zs1,2)))+(cvDet(mF0)*(X1*Y2*cos(fai2)+Z1*Y2*sin(fai2)))/(BLength*(X1*Z2-X2*Z1)*(X1*Z2-X2*Z1));
 						//计算对kappa2的偏导
-						cvSetReal2D(mF_kappa2,0,0,arr_Xs[j]-arr_Xs[i]);
-						cvSetReal2D(mF_kappa2,0,1,arr_Ys[j]-arr_Ys[i]);
-						cvSetReal2D(mF_kappa2,0,2,arr_Zs[j]-arr_Zs[i]);
+						cvSetReal2D(mF_kappa2,0,0,Xs2-Xs1);
+						cvSetReal2D(mF_kappa2,0,1,Ys2-Ys1);
+						cvSetReal2D(mF_kappa2,0,2,Zs2-Zs1);
 						cvSetReal2D(mF_kappa2,1,0,X1);
 						cvSetReal2D(mF_kappa2,1,1,Y1);
 						cvSetReal2D(mF_kappa2,1,2,Z1);
-						cvSetReal2D(mF_kappa2,2,0,-Y2*cos(arr_fai[j])*cos(arr_omiga[j])-Z2*sin(arr_omiga[j]));
-						cvSetReal2D(mF_kappa2,2,1,X2*cos(arr_fai[j])*cos(arr_omiga[j])+Z2*sin(arr_fai[j])*cos(arr_omiga[j]));
-						cvSetReal2D(mF_kappa2,2,2,X2*sin(arr_omiga[j])-Y2*sin(arr_fai[j])*cos(arr_omiga[j]));
-						F_kappa2=-cvDet(mF_kappa2)/((X1*Z2-X2*Z1)*sqrt(pow(arr_Xs[j]-arr_Xs[i],2)+pow(arr_Ys[j]-arr_Ys[i],2)+pow(arr_Zs[j]-arr_Zs[i],2)))+(cvDet(mF0)*(X1*X2*sin(arr_omiga[j])-X1*Y2*sin(arr_fai[j])*cos(arr_omiga[j])+Z1*Y2*cos(arr_fai[j])*cos(arr_omiga[j])+Z1*Z2*sin(arr_omiga[j])))/(BLength*(X1*Z2-X2*Z1)*(X1*Z2-X2*Z1));
-						//计算对Xs1,Ys1,Zs1的偏导
-						F_Xs1=(Y1*Z2-Y2*Z1)/((X1*Z2-X2*Z1)*sqrt(pow(arr_Xs[j]-arr_Xs[i],2)+pow(arr_Ys[j]-arr_Ys[i],2)+pow(arr_Zs[j]-arr_Zs[i],2)))-(cvDet(mF0)*(arr_Xs[j]-arr_Xs[i]))/((X1*Z2-X2*Z1)*pow(BLength,3));
-						F_Ys1=-1/sqrt(pow(arr_Xs[j]-arr_Xs[i],2)+pow(arr_Ys[j]-arr_Ys[i],2)+pow(arr_Zs[j]-arr_Zs[i],2))-(cvDet(mF0)*(arr_Ys[j]-arr_Ys[i]))/((X1*Z2-X2*Z1)*pow(BLength,3));
-						F_Zs1=(X1*Y2-X2*Y1)/((X1*Z2-X2*Z1)*sqrt(pow(arr_Xs[j]-arr_Xs[i],2)+pow(arr_Ys[j]-arr_Ys[i],2)+pow(arr_Zs[j]-arr_Zs[i],2)))-(cvDet(mF0)*(arr_Zs[j]-arr_Zs[i]))/((X1*Z2-X2*Z1)*pow(BLength,3));
-						//计算对Xs2,Ys2,Zs2的偏导
-						F_Xs2=-F_Xs1;
-						F_Ys2=-F_Ys1;
-						F_Zs2=-F_Zs1;
-						//构造矩阵B
-						if(i<NumOfImage-2)
-						{
-							//cvSetReal2D(mB,cRows,6*i,F_Xs1);
-							mBtripletList.emplace_back(cRows,6*i,F_Xs1);
-//							mBP2tripletList.emplace_back(cRows,6*i,F_Xs1*sqrt(arr_p[cRows]));
-							Fs[0]=F_Xs1*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*i+1,F_Ys1);
-							mBtripletList.emplace_back(cRows,6*i+1,F_Ys1);
-//							mBP2tripletList.emplace_back(cRows,6*i+1,F_Ys1*sqrt(arr_p[cRows]));
-							Fs[1]=F_Ys1*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*i+2,F_Zs1);
-							mBtripletList.emplace_back(cRows,6*i+2,F_Zs1);
-//							mBP2tripletList.emplace_back(cRows,6*i+2,F_Zs1*sqrt(arr_p[cRows]));
-							Fs[2]=F_Zs1*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*i+3,F_fai1);
-							mBtripletList.emplace_back(cRows,6*i+3,F_fai1);
-//							mBP2tripletList.emplace_back(cRows,6*i+3,F_fai1*sqrt(arr_p[cRows]));
-							Fs[3]=F_fai1*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*i+4,F_omiga1);
-							mBtripletList.emplace_back(cRows,6*i+4,F_omiga1);
-//							mBP2tripletList.emplace_back(cRows,6*i+4,F_omiga1*sqrt(arr_p[cRows]));
-							Fs[4]=F_omiga1*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*i+5,F_kappa1);
-							mBtripletList.emplace_back(cRows,6*i+5,F_kappa1);
-//							mBP2tripletList.emplace_back(cRows,6*i+5,F_kappa1*sqrt(arr_p[cRows]));
-							Fs[5]=F_kappa1*sqrt(arr_p[cRows]);
-						}
-						else if(i==NumOfImage-2)
-						{
-							//cvSetReal2D(mB,cRows,6*i,F_Ys1);
-							mBtripletList.emplace_back(cRows,6*i,F_Ys1);
-//							mBP2tripletList.emplace_back(cRows,6*i,F_Ys1*sqrt(arr_p[cRows]));
-							Fs[1]=F_Ys1*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*i+1,F_Zs1);
-							mBtripletList.emplace_back(cRows,6*i+1,F_Zs1);
-//							mBP2tripletList.emplace_back(cRows,6*i+1,F_Zs1*sqrt(arr_p[cRows]));
-							Fs[2]=F_Zs1*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*i+2,F_fai1);
-							mBtripletList.emplace_back(cRows,6*i+2,F_fai1);
-//							mBP2tripletList.emplace_back(cRows,6*i+2,F_fai1*sqrt(arr_p[cRows]));
-							Fs[3]=F_fai1*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*i+3,F_omiga1);
-							mBtripletList.emplace_back(cRows,6*i+3,F_omiga1);
-//							mBP2tripletList.emplace_back(cRows,6*i+3,F_omiga1*sqrt(arr_p[cRows]));
-							Fs[4]=F_omiga1*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*i+4,F_kappa1);
-							mBtripletList.emplace_back(cRows,6*i+4,F_kappa1);
-//							mBP2tripletList.emplace_back(cRows,6*i+4,F_kappa1*sqrt(arr_p[cRows]));
-							Fs[5]=F_kappa1*sqrt(arr_p[cRows]);
-						}
-						if(j<NumOfImage-2)
-						{
-							//cvSetReal2D(mB,cRows,6*j,F_Xs2);
-							mBtripletList.emplace_back(cRows,6*j,F_Xs2);
-							//mBP2tripletList.emplace_back(cRows,6*j,F_Xs2*sqrt(arr_p[cRows]));
-							Fs[6]=F_Xs2*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*j+1,F_Ys2);
-							mBtripletList.emplace_back(cRows,6*j+1,F_Ys2);
-							//mBP2tripletList.emplace_back(cRows,6*j+1,F_Ys2*sqrt(arr_p[cRows]));
-							Fs[7]=F_Ys2*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*j+2,F_Zs2);
-							mBtripletList.emplace_back(cRows,6*j+2,F_Zs2);
-							//mBP2tripletList.emplace_back(cRows,6*j+2,F_Zs2*sqrt(arr_p[cRows]));
-							Fs[8]=F_Zs2*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*j+3,F_fai2);
-							mBtripletList.emplace_back(cRows,6*j+3,F_fai2);
-							//mBP2tripletList.emplace_back(cRows,6*j+3,F_fai2*sqrt(arr_p[cRows]));
-							Fs[9]=F_fai2*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*j+4,F_omiga2);
-							mBtripletList.emplace_back(cRows,6*j+4,F_omiga2);
-							//mBP2tripletList.emplace_back(cRows,6*j+4,F_omiga2*sqrt(arr_p[cRows]));
-							Fs[10]=F_omiga2*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*j+5,F_kappa2);
-							mBtripletList.emplace_back(cRows,6*j+5,F_kappa2);
-							//mBP2tripletList.emplace_back(cRows,6*j+5,F_kappa2*sqrt(arr_p[cRows]));
-							Fs[11]=F_kappa2*sqrt(arr_p[cRows]);
-						}
-						else if(j==NumOfImage-2)
-						{
-							//cvSetReal2D(mB,cRows,6*j,F_Ys2);
-							mBtripletList.emplace_back(cRows,6*j,F_Ys2);
-//							mBP2tripletList.emplace_back(cRows,6*j,F_Ys2*sqrt(arr_p[cRows]));
-							Fs[7]=F_Ys2*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*j+1,F_Zs2);
-							mBtripletList.emplace_back(cRows,6*j+1,F_Zs2);
-//							mBP2tripletList.emplace_back(cRows,6*j+1,F_Zs2*sqrt(arr_p[cRows]));
-							Fs[8]=F_Zs2*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*j+2,F_fai2);
-							mBtripletList.emplace_back(cRows,6*j+2,F_fai2);
-//							mBP2tripletList.emplace_back(cRows,6*j+2,F_fai2*sqrt(arr_p[cRows]));
-							Fs[9]=F_fai2*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*j+3,F_omiga2);
-							mBtripletList.emplace_back(cRows,6*j+3,F_omiga2);
-//							mBP2tripletList.emplace_back(cRows,6*j+3,F_omiga2*sqrt(arr_p[cRows]));
-							Fs[10]=F_omiga2*sqrt(arr_p[cRows]);
-							//cvSetReal2D(mB,cRows,6*j+4,F_kappa2);
-							mBtripletList.emplace_back(cRows,6*j+4,F_kappa2);
-	//						mBP2tripletList.emplace_back(cRows,6*j+4,F_kappa2*sqrt(arr_p[cRows]));
-							Fs[11]=F_kappa2*sqrt(arr_p[cRows]);
-						}
-						vL.emplace_back(cRows,0,F1);
-						for(int l=0;l<12;l++)
-						{
-							for(int o=0;o<12;o++)
-							{
-								kernels[l*12+o]+=Fs[l]*Fs[o];
-							}
-						}
-						for(int l=0;l<12;l++)
-						{
-							Ls[l]+=Fs[l]*F0;
-						}
-//						smBP.setFromTriplets(mBP2tripletList.begin(),mBP2tripletList.end());
-//						smBPB_d2=smBP.transpose()*smBP;
-//						smBPB2+=smBPB_d2;
-	//					mBP2tripletList.clear();
-						/*if(interator>3)
-						{
-							p=exp(-0.05*pow(fabs(cvGetReal2D(mV,cRows,0))/sigma0,3));
-							arr_p[cRows]=p;
-						}
-						else
-						{
-							p=1;
-				            arr_p[cRows]=p;
-						}*/
-						cRows++;
-					
+						cvSetReal2D(mF_kappa2,2,0,-Y2*cos(fai2)*cos(omiga2)-Z2*sin(omiga2));
+						cvSetReal2D(mF_kappa2,2,1,X2*cos(fai2)*cos(omiga2)+Z2*sin(fai2)*cos(omiga2));
+						cvSetReal2D(mF_kappa2,2,2,X2*sin(omiga2)-Y2*sin(fai2)*cos(omiga2));
+						F_kappa2=-cvDet(mF_kappa2)/((X1*Z2-X2*Z1)*sqrt(pow(Xs2-Xs1,2)+pow(Ys2-Ys1,2)+pow(Zs2-Zs1,2)))+(cvDet(mF0)*(X1*X2*sin(omiga2)-X1*Y2*sin(fai2)*cos(omiga2)+Z1*Y2*cos(fai2)*cos(omiga2)+Z1*Z2*sin(omiga2)))/(BLength*(X1*Z2-X2*Z1)*(X1*Z2-X2*Z1));
+
+						cvSetReal2D(msB,k,0,F_Ys2);
+						cvSetReal2D(msB,k,1,F_Zs2);
+						cvSetReal2D(msB,k,2,F_fai2);
+						cvSetReal2D(msB,k,3,F_omiga2);
+						cvSetReal2D(msB,k,4,F_kappa2);
+						cvSetReal2D(msL,k,0,F0);
+					}
+					cvSolve(msB,msL,msX);
+					Ys2+=cvGetReal2D(msX,0,0);
+					Zs2+=cvGetReal2D(msX,1,0);
+					fai2+=cvGetReal2D(msX,2,0);
+					omiga2+=cvGetReal2D(msX,3,0);
+					kappa2+=cvGetReal2D(msX,4,0);
 				}
-				for(int l=0;l<12;l++)
+				Calculate_Matrix_R(mR1,fai1,omiga1,kappa1);
+				Calculate_Matrix_R(mR2,fai2,omiga2,kappa2);
+				BLength=sqrt(pow(Xs2-Xs1,2)+pow(Ys2-Ys1,2)+pow(Zs2-Zs1,2));
+				vector<int> Inliers;
+				for(int j=0;j<RealMatchNum[No_left*NumOfImage+No_right];j++)
 				{
-					if(Indexs[l]!=-1)
-					dvBPL[Indexs[l]]=dvBPL[Indexs[l]]+Ls[l];
-					for(int o=0;o<12;o++)
+					x1=CorresCoordinate[No_left*NumOfImage+No_right][j].x1;
+					y1=CorresCoordinate[No_left*NumOfImage+No_right][j].y1;
+					x2=CorresCoordinate[No_left*NumOfImage+No_right][j].x2;
+					y2=CorresCoordinate[No_left*NumOfImage+No_right][j].y2;
+					xyz2XYZ(mR1,x1,y1,-f1,&X1,&Y1,&Z1);
+					xyz2XYZ(mR2,x2,y2,-f2,&X2,&Y2,&Z2);
+					cvSetReal2D(mF0,0,0,Xs2-Xs1);
+					cvSetReal2D(mF0,0,1,Ys2-Ys1);
+					cvSetReal2D(mF0,0,2,Zs2-Zs1);
+					cvSetReal2D(mF0,1,0,X1);
+					cvSetReal2D(mF0,1,1,Y1);
+					cvSetReal2D(mF0,1,2,Z1);
+					cvSetReal2D(mF0,2,0,X2);
+					cvSetReal2D(mF0,2,1,Y2);
+					cvSetReal2D(mF0,2,2,Z2);
+					F0=cvDet(mF0)/((X1*Z2-X2*Z1)*sqrt(pow(Xs2-Xs1,2)+pow(Ys2-Ys1,2)+pow(Zs2-Zs1,2)));
+					if(fabs(F0)<ransac_threshold)
 					{
-						if(Indexs[l]!=-1&&Indexs[o]!=-1)
-						{
-							mBPtripletList.emplace_back(Indexs[l],Indexs[o],kernels[l*12+o]);
-						}
+						Inliers.push_back(j);
 					}
 				}
-				smBPB_d.setFromTriplets(mBPtripletList.begin(),mBPtripletList.end());
-				mBPtripletList.clear();
-				psmBPB[i/EveryStage]+=smBPB_d;
-//				smBPB3=smBPB-smBPB2;
-			}
-		}
-		for(int u=0;u<StageNum;u++)
-		{
-			smBPB+=psmBPB[u];
-			psmBPB[u].setZero();
-		}
-		smB.setFromTriplets(mBtripletList.begin(),mBtripletList.end());
-//		smBP.setFromTriplets(mBP2tripletList.begin(),mBP2tripletList.end());
-//		smBP.setFromTriplets(mBPtripletList.begin(),mBPtripletList.end());
-		smB.makeCompressed();
-//		smBP.makeCompressed();
-//		smBPB2=smBP.transpose()*smBP;
-		svL.setFromTriplets(vL.begin(),vL.end());
-//		svBPL=smBP.transpose()*svL;
-//		dvBPL=svBPL;
-//		smBPB3=smBPB-smBPB2;
-		superSolver3.compute(smBPB);
-		smBPB.setZero();
-		Eigen::VectorXd vX =superSolver3.solve(dvBPL);
-		dvBPL.setZero();
-//	    linearSolver.compute(smBPB);
-//		Eigen::VectorXd vX = dmBPB.lu().solve(dvBPL);
-		for(int i=0;i<nCols;i++)
-		{
-			mXtripletList.emplace_back(i,0,vX[i]);
-		}
-		svX.setFromTriplets(mXtripletList.begin(),mXtripletList.end());
-		svV=smB*svX-svL; //改成smB
-		dvV=svV;
-		mXtripletList.clear();
-		vL.clear();
-//		Eigen::VectorXd vX;
-		//检测矩阵输入是否正确
-		if(cRows==nRows)printf("Right!\n");
-		else printf("Wrong!\tcRows=%d,\tnRows=%d\n",cRows,nRows);
-	    //解算改正数
-		
-		/*for(int i=0;i<nRows;i++)
-		{
-			for(int j=0;j<nCols;j++)
-			{
-				cvSetReal2D(mBP,i,j,cvGetReal2D(mB,i,j)*arr_p[i]);
-			}
-		}*/
-		/*if(interator>3)
-		{
-			for(int i=0;i<nRows;i++)
-			{
-				p=exp(-0.05*pow(fabs(cvGetReal2D(mV,i,0))/sigma0,3));
-				arr_p[i]=p;
-				for(int j=0;j<nCols;j++)
+				AllInliers[i]=Inliers;
+				Inlier_num[i]=Inliers.size();
+				Inliers.clear();
+				dYs=fabs(cvGetReal2D(msX,0,0));
+				dZs=fabs(cvGetReal2D(msX,1,0));
+				dfai=fabs(cvGetReal2D(msX,2,0));
+				domiga=fabs(cvGetReal2D(msX,3,0));
+				dkappa=fabs(cvGetReal2D(msX,4,0));
+				if(dYs>0.01||dZs>0.01||dfai>0.001||domiga>0.001||dkappa>0.001)
 				{
-					cvSetReal2D(mBP,i,j,cvGetReal2D(mB,i,j)*p);
+				    AllInliers[i]=Inliers;
+				    Inlier_num[i]=Inliers.size();
+				}
+			}
+			Shulie_ix.clear();
+			CMaxChoice=MINVALUE;
+			for(int i=0;i<Diedaicishu;i++)
+			{
+				if(Inlier_num[i]>CMaxChoice)
+				{
+					CMaxChoice=Inlier_num[i];
+					IMaxChoice=i;
+				}
+			}
+			if(CMaxChoice>20)
+			{
+				coGraph[No_left*NumOfImage+No_right]=1;
+				coGraph[No_right*NumOfImage+No_left]=1;
+			}
+			fprintf(fpPured,"%d\t%d\t",No_left,No_right);
+			fprintf(fpdPured,"%d\t%d\t",No_left,No_right);
+			fprintf(fpCheck,"%6d%6d%8d",No_left,No_right,CMaxChoice);
+			if(CMaxChoice<20)
+			{
+				fprintf(fpCheck,"\n");
+				fprintf(fpPured,"%d\n",0);
+				fprintf(fpdPured,"%d\n",0);
+				puredPoints[No_left*NumOfImage+No_right]=NULL;
+				PureMatchNum[No_left*NumOfImage+No_right]=0;
+				continue;
+			}
+			RSCheck_interator=0;
+			Inliers_Chosen=AllInliers[IMaxChoice];
+			mB=cvCreateMat(CMaxChoice,5,CV_32FC1);
+			mL=cvCreateMat(CMaxChoice,1,CV_32FC1);
+			mV=cvCreateMat(CMaxChoice,1,CV_32FC1);
+			Xs1=arr_Xs[No_left];Ys1=arr_Ys[No_left];Zs1=arr_Zs[No_left];
+			Xs2=arr_Xs[No_right];Ys2=arr_Ys[No_right];Zs2=arr_Zs[No_right];
+			fai1=arr_fai[No_left];omiga1=arr_omiga[No_left];kappa1=arr_kappa[No_left];
+			fai2=arr_fai[No_right];omiga2=arr_omiga[No_right];kappa2=arr_kappa[No_right];
+			while(RSCheck_interator<10)
+			{
+				RSCheck_interator++;
+				Calculate_Matrix_R(mR1,fai1,omiga1,kappa1);
+				Calculate_Matrix_R(mR2,fai2,omiga2,kappa2);
+				BLength=sqrt(pow(Xs2-Xs1,2)+pow(Ys2-Ys1,2)+pow(Zs2-Zs1,2));
+				for(int k=0;k<CMaxChoice;k++)
+				{
+					x1=CorresCoordinate[No_left*NumOfImage+No_right][Inliers_Chosen[k]].x1;
+					y1=CorresCoordinate[No_left*NumOfImage+No_right][Inliers_Chosen[k]].y1;
+					x2=CorresCoordinate[No_left*NumOfImage+No_right][Inliers_Chosen[k]].x2;
+					y2=CorresCoordinate[No_left*NumOfImage+No_right][Inliers_Chosen[k]].y2;
+					f1=cams[camfile[No_left].CamIndex-1].f;
+					f2=cams[camfile[No_right].CamIndex-1].f;
+					xyz2XYZ(mR1,x1,y1,-f1,&X1,&Y1,&Z1);
+					xyz2XYZ(mR2,x2,y2,-f2,&X2,&Y2,&Z2);
+					cvSetReal2D(mF0,0,0,Xs2-Xs1);
+					cvSetReal2D(mF0,0,1,Ys2-Ys1);
+					cvSetReal2D(mF0,0,2,Zs2-Zs1);
+					cvSetReal2D(mF0,1,0,X1);
+					cvSetReal2D(mF0,1,1,Y1);
+					cvSetReal2D(mF0,1,2,Z1);
+					cvSetReal2D(mF0,2,0,X2);
+					cvSetReal2D(mF0,2,1,Y2);
+					cvSetReal2D(mF0,2,2,Z2);
+					F0=cvDet(mF0)/((X1*Z2-X2*Z1)*sqrt(pow(Xs2-Xs1,2)+pow(Ys2-Ys1,2)+pow(Zs2-Zs1,2)));
+					//计算F_Ys2,F_Zs2
+					F_Ys2=1/sqrt(pow(Xs2-Xs1,2)+pow(Ys2-Ys1,2)+pow(Zs2-Zs1,2))+(cvDet(mF0)*(Ys2-Ys1))/((X1*Z2-X2*Z1)*pow(BLength,3));
+					F_Zs2=-(X1*Y2-X2*Y1)/((X1*Z2-X2*Z1)*sqrt(pow(Xs2-Xs1,2)+pow(Ys2-Ys1,2)+pow(Zs2-Zs1,2)))+(cvDet(mF0)*(Zs2-Zs1))/((X1*Z2-X2*Z1)*pow(BLength,3));
+					//计算对fai2的偏导
+					cvSetReal2D(mF_fai2,0,0,Xs2-Xs1);
+					cvSetReal2D(mF_fai2,0,1,Ys2-Ys1);
+					cvSetReal2D(mF_fai2,0,2,Zs2-Zs1);
+					cvSetReal2D(mF_fai2,1,0,X1);
+					cvSetReal2D(mF_fai2,1,1,Y1);
+					cvSetReal2D(mF_fai2,1,2,Z1);
+					cvSetReal2D(mF_fai2,2,0,-Z2);
+					cvSetReal2D(mF_fai2,2,1,0);
+					cvSetReal2D(mF_fai2,2,2,X2);
+					F_fai2=-cvDet(mF_fai2)/((X1*Z2-X2*Z1)*sqrt(pow(Xs2-Xs1,2)+pow(Ys2-Ys1,2)+pow(Zs2-Zs1,2)))+(cvDet(mF0)*(X1*X2+Z1*Z2))/(BLength*(X1*Z2-X2*Z1)*(X1*Z2-X2*Z1));
+					//计算对omiga2的偏导
+					cvSetReal2D(mF_omiga2,0,0,Xs2-Xs1);
+					cvSetReal2D(mF_omiga2,0,1,Ys2-Ys1);
+					cvSetReal2D(mF_omiga2,0,2,Zs2-Zs1);
+					cvSetReal2D(mF_omiga2,1,0,X1);
+					cvSetReal2D(mF_omiga2,1,1,Y1);
+					cvSetReal2D(mF_omiga2,1,2,Z1);
+					cvSetReal2D(mF_omiga2,2,0,-Y2*sin(fai2));
+					cvSetReal2D(mF_omiga2,2,1,X2*sin(fai2)-Z2*cos(fai2));
+					cvSetReal2D(mF_omiga2,2,2,Y2*cos(fai2));
+					F_omiga2=-cvDet(mF_omiga2)/((X1*Z2-X2*Z1)*sqrt(pow(Xs2-Xs1,2)+pow(Ys2-Ys1,2)+pow(Zs2-Zs1,2)))+(cvDet(mF0)*(X1*Y2*cos(fai2)+Z1*Y2*sin(fai2)))/(BLength*(X1*Z2-X2*Z1)*(X1*Z2-X2*Z1));
+					//计算对kappa2的偏导
+					cvSetReal2D(mF_kappa2,0,0,Xs2-Xs1);
+					cvSetReal2D(mF_kappa2,0,1,Ys2-Ys1);
+					cvSetReal2D(mF_kappa2,0,2,Zs2-Zs1);
+					cvSetReal2D(mF_kappa2,1,0,X1);
+					cvSetReal2D(mF_kappa2,1,1,Y1);
+					cvSetReal2D(mF_kappa2,1,2,Z1);
+					cvSetReal2D(mF_kappa2,2,0,-Y2*cos(fai2)*cos(omiga2)-Z2*sin(omiga2));
+					cvSetReal2D(mF_kappa2,2,1,X2*cos(fai2)*cos(omiga2)+Z2*sin(fai2)*cos(omiga2));
+					cvSetReal2D(mF_kappa2,2,2,X2*sin(omiga2)-Y2*sin(fai2)*cos(omiga2));
+					F_kappa2=-cvDet(mF_kappa2)/((X1*Z2-X2*Z1)*sqrt(pow(Xs2-Xs1,2)+pow(Ys2-Ys1,2)+pow(Zs2-Zs1,2)))+(cvDet(mF0)*(X1*X2*sin(omiga2)-X1*Y2*sin(fai2)*cos(omiga2)+Z1*Y2*cos(fai2)*cos(omiga2)+Z1*Z2*sin(omiga2)))/(BLength*(X1*Z2-X2*Z1)*(X1*Z2-X2*Z1));
+				    
+					cvSetReal2D(mB,k,0,F_Ys2);
+					cvSetReal2D(mB,k,1,F_Zs2);
+					cvSetReal2D(mB,k,2,F_fai2);
+					cvSetReal2D(mB,k,3,F_omiga2);
+					cvSetReal2D(mB,k,4,F_kappa2);
+					cvSetReal2D(mL,k,0,F0);
+				}
+				cvSolve(mB,mL,msX);
+				Ys2+=cvGetReal2D(msX,0,0);
+				Zs2+=cvGetReal2D(msX,1,0);
+				fai2+=cvGetReal2D(msX,2,0);
+				omiga2+=cvGetReal2D(msX,3,0);
+				kappa2+=cvGetReal2D(msX,4,0);
+			}
+			Max_L=MINVALUE;
+			Ave_L=0;
+			for(int i=0;i<CMaxChoice;i++)
+			{
+				Ele_L=fabs(cvGetReal2D(mL,i,0));
+				if(Ele_L>Max_L)Max_L=Ele_L;
+				Ave_L+=Ele_L;
+			}
+			Ave_L=Ave_L/CMaxChoice;
+			dYs=fabs(cvGetReal2D(msX,0,0));
+			dZs=fabs(cvGetReal2D(msX,1,0));
+			dfai=fabs(cvGetReal2D(msX,2,0));
+			domiga=fabs(cvGetReal2D(msX,3,0));
+			dkappa=fabs(cvGetReal2D(msX,4,0));
+			if(dYs>0.01||dZs>0.01||dfai>0.001||domiga>0.001||dkappa>0.001)
+			{
+				//Do nothing.
+				coGraph[No_left*NumOfImage+No_right]=0;
+				coGraph[No_right*NumOfImage+No_left]=0;
+				fprintf(fpPured,"%d\n",0);
+				fprintf(fpdPured,"%d\n",0);
+				fprintf(fpCheck,"\n");
+				puredPoints[No_left*NumOfImage+No_right]=NULL;
+				PureMatchNum[No_left*NumOfImage+No_right]=0;
+			}
+			else
+			{
+			    fprintf(fpCheck,"%10.6lf%10.6lf\t%lf\t%lf\t%lf\t%lf\t%lf\t%lf\t%lf\t%lf\t%lf\t%lf\t%lf\t%lf\n",Max_L,Ave_L,arr_Xs[No_left],arr_Ys[No_left],arr_Zs[No_left],arr_fai[No_left],arr_omiga[No_left],arr_kappa[No_left],arr_Xs[No_right],Ys2,Zs2,fai2,omiga2,kappa2);
+				fprintf(fpPured,"%d\t",CMaxChoice);
+				fprintf(fpdPured,"%d\t",CMaxChoice);
+				for(int i=0;i<CMaxChoice;i++)
+				{
+					fprintf(fpPured,"%lf\t",CorresCoordinate[No_left*NumOfImage+No_right][Inliers_Chosen[i]].x1);
+					fprintf(fpdPured,"%d\t",CorresCoordinate[No_left*NumOfImage+No_right][Inliers_Chosen[i]].row1);
+				}
+				for(int i=0;i<CMaxChoice;i++)
+				{
+					fprintf(fpPured,"%lf\t",CorresCoordinate[No_left*NumOfImage+No_right][Inliers_Chosen[i]].y1);
+					fprintf(fpdPured,"%d\t",CorresCoordinate[No_left*NumOfImage+No_right][Inliers_Chosen[i]].col1);
+				}
+				for(int i=0;i<CMaxChoice;i++)
+				{
+					fprintf(fpPured,"%lf\t",CorresCoordinate[No_left*NumOfImage+No_right][Inliers_Chosen[i]].x2);
+					fprintf(fpdPured,"%d\t",CorresCoordinate[No_left*NumOfImage+No_right][Inliers_Chosen[i]].row2);
+				}
+				for(int i=0;i<CMaxChoice;i++)
+				{
+					fprintf(fpPured,"%lf\t",CorresCoordinate[No_left*NumOfImage+No_right][Inliers_Chosen[i]].y2);
+					fprintf(fpdPured,"%d\t",CorresCoordinate[No_left*NumOfImage+No_right][Inliers_Chosen[i]].col2);
+				}
+				fprintf(fpPured,"\n");
+				fprintf(fpdPured,"\n");
+				puredPoints[No_left*NumOfImage+No_right]=new CorresPoint [CMaxChoice];
+				PureMatchNum[No_left*NumOfImage+No_right]=CMaxChoice;
+				for(int i=0;i<CMaxChoice;i++)
+				{
+					puredPoints[No_left*NumOfImage+No_right][i].x1=CorresCoordinate[No_left*NumOfImage+No_right][Inliers_Chosen[i]].x1;
+					puredPoints[No_left*NumOfImage+No_right][i].y1=CorresCoordinate[No_left*NumOfImage+No_right][Inliers_Chosen[i]].y1;
+					puredPoints[No_left*NumOfImage+No_right][i].x2=CorresCoordinate[No_left*NumOfImage+No_right][Inliers_Chosen[i]].x2;
+					puredPoints[No_left*NumOfImage+No_right][i].y2=CorresCoordinate[No_left*NumOfImage+No_right][Inliers_Chosen[i]].y2;
+					puredPoints[No_left*NumOfImage+No_right][i].value=CorresCoordinate[No_left*NumOfImage+No_right][Inliers_Chosen[i]].value;
+					puredPoints[No_left*NumOfImage+No_right][i].index1=CorresCoordinate[No_left*NumOfImage+No_right][Inliers_Chosen[i]].index1;
+					puredPoints[No_left*NumOfImage+No_right][i].index2=CorresCoordinate[No_left*NumOfImage+No_right][Inliers_Chosen[i]].index2;
+				}
+			}
+			cvGEMM(mB,msX,1,mL,-1,mV);
+			cvReleaseMat(&mB);
+			cvReleaseMat(&mL);
+			cvReleaseMat(&mV);
+		}
+	}
+	fclose(fpPured);
+	fclose(fpCheck);
+	vector<IpsOfOp>* arr_IpsOfOp=new vector<IpsOfOp> [value];
+    IpsOfOp ele_IpsOfOp;
+	for(int i=0;i<NumOfImage;i++)
+	{
+		for(int j=0;j<NumOfImage;j++)
+		{
+			for(int k=0;k<PureMatchNum[i*NumOfImage+j];k++)
+			{
+				if(puredPoints[i*NumOfImage+j][k].value!=-1)
+				{
+					ele_IpsOfOp.i=i;
+					ele_IpsOfOp.j=j;
+					ele_IpsOfOp.k=k;
+					arr_IpsOfOp[puredPoints[i*NumOfImage+j][k].value].push_back(ele_IpsOfOp);
 				}
 			}
 		}
-		else
+	}
+	for(int i=0;i<NumOfImage;i++)
+	{
+		for(int j=0;j<NumOfImage;j++)
 		{
-			for(int i=0;i<nRows;i++)
+			for(int k=0;k<PureMatchNum[i*NumOfImage+j];k++)
 			{
-				p=1;
-				arr_p[i]=p;
-				for(int j=0;j<nCols;j++)
+				if(puredPoints[i*NumOfImage+j][k].value==-1)
+					puredPoints[i*NumOfImage+j][k].overlap=2;
+				else
+					puredPoints[i*NumOfImage+j][k].overlap=arr_IpsOfOp[puredPoints[i*NumOfImage+j][k].value].size();
+			}
+		}
+	}
+	int *Pure3MatchNum=new int [NumOfImage*NumOfImage];
+	int count3pts;
+	for(int i=0;i<NumOfImage;i++)
+	{
+		for(int j=0;j<NumOfImage;j++)
+		{
+			if(PureMatchNum[i*NumOfImage+j]==0)
+			{
+				Pure3MatchNum[i*NumOfImage+j]=0;
+				continue;
+			}
+			else
+			{
+				count3pts=0;
+				for(int k=0;k<PureMatchNum[i*NumOfImage+j];k++)
 				{
-					cvSetReal2D(mBP,i,j,cvGetReal2D(mB,i,j)*p);
+					if(puredPoints[i*NumOfImage+j][k].overlap>2)
+						count3pts++;
+				}
+				Pure3MatchNum[i*NumOfImage+j]=count3pts;
+			}
+		}
+	}
+	FILE* fpPured3;
+	fpPured3=fopen("E:\\SelectedCoordinates_New3.txt","w");
+	for(int i=0;i<NumOfImage;i++)
+	{
+		for(int j=0;j<NumOfImage;j++)
+		{
+			fprintf(fpPured3,"%d\t%d\t",i,j);
+			if(Pure3MatchNum[i*NumOfImage+j]==0)
+			{
+				fprintf(fpPured3,"0\n");
+				continue;
+			}
+			fprintf(fpPured3,"%d\t",Pure3MatchNum[i*NumOfImage+j]);
+			for(int k=0;k<PureMatchNum[i*NumOfImage+j];k++)
+			{
+				if(puredPoints[i*NumOfImage+j][k].overlap>2)
+				{
+					fprintf(fpPured3,"%lf\t",puredPoints[i*NumOfImage+j][k].x1);
 				}
 			}
-		}*/
-		/*cvGEMM(mBP,mB,1,NULL,0,mBTB,CV_GEMM_A_T);
-		cvGEMM(mBP,mL,1,NULL,0,mBTL,CV_GEMM_A_T);*/
-		/*for(int y=0;y<mBTB->height;y++)
-		{
-			for(int x=0;x<mBTB->width;x++)
+			for(int k=0;k<PureMatchNum[i*NumOfImage+j];k++)
 			{
-				fprintf(fpB,"%20.6e",cvGetReal2D(mBTB,y,x));
+				if(puredPoints[i*NumOfImage+j][k].overlap>2)
+				{
+					fprintf(fpPured3,"%lf\t",puredPoints[i*NumOfImage+j][k].y1);
+				}
 			}
-			fprintf(fpB,"\n");
+			for(int k=0;k<PureMatchNum[i*NumOfImage+j];k++)
+			{
+				if(puredPoints[i*NumOfImage+j][k].overlap>2)
+				{
+					fprintf(fpPured3,"%lf\t",puredPoints[i*NumOfImage+j][k].x2);
+				}
+			}
+			for(int k=0;k<PureMatchNum[i*NumOfImage+j];k++)
+			{
+				if(puredPoints[i*NumOfImage+j][k].overlap>2)
+				{
+					fprintf(fpPured3,"%lf\t",puredPoints[i*NumOfImage+j][k].y2);
+				}
+			}
+			fprintf(fpPured3,"\n");
 		}
-		fclose(fpB);*/
-		/*if(NumOfImage<15)
-			method=CV_LU;
-		else
-			method=CV_SVD_SYM;
-		cvInvert(mBTB,mInv_BTB,CV_SVD_SYM);
-		cvGEMM(mInv_BTB,mBTL,1,NULL,0,mX);*/
-		sprintf(X_str,"F:\\killkillkill3720\\XbyStep4\\X%d.txt",interator);
-		fpX=fopen(X_str,"w");
-		fprintf(fpX,"%d\n",interator);
-		for(int y=0;y<vX.size();y++)
-		{
-			fprintf(fpX,"%lf\n",vX[y]);
-		}
-		fclose(fpX);
-		//cvSolve(mB,mL,mX);
-		for(int i=0;i<NumOfImage-2;i++)
-		{
-			//arr_Xs[i]+=cvGetReal2D(mX,6*i,0);
-			arr_Xs[i]+=vX[6*i];
-			//arr_Ys[i]+=cvGetReal2D(mX,6*i+1,0);
-			arr_Ys[i]+=vX[6*i+1];
-			//arr_Zs[i]+=cvGetReal2D(mX,6*i+2,0);
-			arr_Zs[i]+=vX[6*i+2];
-			//arr_fai[i]+=cvGetReal2D(mX,6*i+3,0);
-			arr_fai[i]+=vX[6*i+3];
-			//arr_omiga[i]+=cvGetReal2D(mX,6*i+4,0);
-			arr_omiga[i]+=vX[6*i+4];
-			//arr_kappa[i]+=cvGetReal2D(mX,6*i+5,0);
-			arr_kappa[i]+=vX[6*i+5];
-		}
-		//arr_Ys[NumOfImage-2]+=cvGetReal2D(mX,6*(NumOfImage-2),0);
-		arr_Ys[NumOfImage-2]+=vX[6*(NumOfImage-2)];
-		//arr_Zs[NumOfImage-2]+=cvGetReal2D(mX,6*(NumOfImage-2)+1,0);
-		arr_Zs[NumOfImage-2]+=vX[6*(NumOfImage-2)+1];
-		//arr_fai[NumOfImage-2]+=cvGetReal2D(mX,6*(NumOfImage-2)+2,0);
-		arr_fai[NumOfImage-2]+=vX[6*(NumOfImage-2)+2];
-		//arr_omiga[NumOfImage-2]+=cvGetReal2D(mX,6*(NumOfImage-2)+3,0);
-		arr_omiga[NumOfImage-2]+=vX[6*(NumOfImage-2)+3];
-		//arr_kappa[NumOfImage-2]+=cvGetReal2D(mX,6*(NumOfImage-2)+4,0);
-		arr_kappa[NumOfImage-2]+=vX[6*(NumOfImage-2)+4];
-		FILE* fpExterior2;
-	   fpExterior2=fopen("F:\\killkillkill3720\\Generated_Exterior_Elements2.txt","w");
-	   for(int i=0;i<NumOfImage;i++)
-	  {
-		    fprintf(fpExterior2,"%lf\t%lf\t%lf\t%lf\t%lf\t%lf\t%lf\n",arr_Xs[i],arr_Ys[i],arr_Zs[i],arr_fai[i],arr_omiga[i],arr_kappa[i],arr_f[i]);
-	   }
-	   fclose(fpExterior2);
-		vtpv=0;
-		//cvGEMM(mB,mX,1,mL,-1,mV);
-		for(int i=0;i<nRows;i++)
-		{
-			vtpv+=dvV(i,0)*dvV(i,0)*arr_p[i];
-		}
-		//cvGEMM(mV,mV,1,NULL,0,mVTV,CV_GEMM_A_T);
-		sigma0=sqrt(vtpv/(nRows-nCols));
-		stop=true;
-		for(int i=0;i<NumOfImage-2;i++)
-		{
-			if(fabs(vX[6*i+3])>0.00005)
-			stop=false;
-			if(fabs(vX[6*i+4])>0.00005)
-			stop=false;
-			if(fabs(vX[6*i+5])>0.00005)
-			stop=false;
-		}
-		/*if(fabs(cvGetReal2D(mX,6*(NumOfImage-2)+2,0))>0.00005)
-			stop=false;
-		if(fabs(cvGetReal2D(mX,6*(NumOfImage-2)+3,0))>0.00005)
-			stop=false;
-		if(fabs(cvGetReal2D(mX,6*(NumOfImage-2)+4,0))>0.00005)
-			stop=false;*/
 	}
-	/*FILE* fpmX;
-	fpmX=fopen("F:\\mX.txt","w");
-	double mi;
-	for(int i=0;i<nCols;i++)
+	fclose(fpPured3);
+	FILE* fpCheck3;
+	fpCheck3=fopen("F:\\Overlap3Check.txt","w");
+	for(int i=0;i<value;i++)
 	{
-		mi=sqrt(cvGetReal2D(mInv_BTB,i,i))*sigma0;
-		fprintf(fpmX,"%lf\n",mi);
+		fprintf(fpCheck3,"%d\n",i);
+		for(int j=0;j<arr_IpsOfOp[i].size();j++)
+		{
+			fprintf(fpCheck3,"%d\t%d\t%d\t%d\n",arr_IpsOfOp[i][j].i,puredPoints[arr_IpsOfOp[i][j].i*NumOfImage+arr_IpsOfOp[i][j].j][arr_IpsOfOp[i][j].k].index1,arr_IpsOfOp[i][j].j,puredPoints[arr_IpsOfOp[i][j].i*NumOfImage+arr_IpsOfOp[i][j].j][arr_IpsOfOp[i][j].k].index2);
+		}
 	}
-	for(int i=0;i<nCols;i++)
+	fclose(fpCheck3);
+	int Strips[49]={1,1,1,1,1,2,2,2,2,2,3,3,3,3,3,4,4,4,4,4,1,1,1,1,2,2,2,2,2,2,2,4,4,4,4,3,3,3,3,3,5,5,5,5,5,5,5,5,5};
+	vector<IpsOfOp>* arr_IpsOfOp2=new vector<IpsOfOp> [5*5];
+	for(int i=0;i<value;i++)
 	{
-		mi=sqrt(cvGetReal2D(mInv_BTB,i,i))*sigma0;
-		fprintf(fpmX,"%e\n",mi);
+		for(int j=0;j<arr_IpsOfOp[i].size();j++)
+		{
+			//if(Strips[arr_IpsOfOp[i][j].i]!=Strips[arr_IpsOfOp[i][j].j])
+			{
+				arr_IpsOfOp2[(Strips[arr_IpsOfOp[i][j].i]-1)*5+Strips[arr_IpsOfOp[i][j].j]-1].push_back(arr_IpsOfOp[i][j]);
+			}
+		}
 	}
-	fclose(fpmX);*/
-	
-	FILE* fpL;
-	fpL=fopen("C:\\Matlabfiles\\L7.txt","w");
-	
-	Eigen::MatrixXd dvL(nRows,1);
-	dvL=svL;
-	for(int i=0;i<nRows;i++)
+	FILE* fpBtStrips;
+	fpBtStrips=fopen("F:\\BetweenStrips.txt","w");
+	for(int i=0;i<5;i++)
 	{
-	    fprintf(fpL,"%lf\n",dvL(i,0));
+		for(int j=0;j<5;j++)
+		{
+			fprintf(fpBtStrips,"%d\t%d\t%d\n",i,j,arr_IpsOfOp2[i*5+j].size());
+			for(int k=0;k<arr_IpsOfOp2[i*5+j].size();k++)
+			{
+				//fprintf(fpBtStrips,"%d\t%d\t%d\t%d\n",arr_IpsOfOp2[i*5+j][k].i,puredPoints[arr_IpsOfOp2[i*5+j][k].i*NumOfImage+arr_IpsOfOp2[i*5+j][k].j][arr_IpsOfOp2[i*5+j][k].k].index1,arr_IpsOfOp2[i*5+j][k].j,puredPoints[arr_IpsOfOp2[i*5+j][k].i*NumOfImage+arr_IpsOfOp2[i*5+j][k].j][arr_IpsOfOp2[i*5+j][k].k].index2);
+			    fprintf(fpBtStrips,"%d\t%lf\t%lf\t%d\t%lf\t%lf\n",arr_IpsOfOp2[i*5+j][k].i,puredPoints[arr_IpsOfOp2[i*5+j][k].i*NumOfImage+arr_IpsOfOp2[i*5+j][k].j][arr_IpsOfOp2[i*5+j][k].k].x1,puredPoints[arr_IpsOfOp2[i*5+j][k].i*NumOfImage+arr_IpsOfOp2[i*5+j][k].j][arr_IpsOfOp2[i*5+j][k].k].y1,arr_IpsOfOp2[i*5+j][k].j,puredPoints[arr_IpsOfOp2[i*5+j][k].i*NumOfImage+arr_IpsOfOp2[i*5+j][k].j][arr_IpsOfOp2[i*5+j][k].k].x2,puredPoints[arr_IpsOfOp2[i*5+j][k].i*NumOfImage+arr_IpsOfOp2[i*5+j][k].j][arr_IpsOfOp2[i*5+j][k].k].y2);
+			}
+		}
 	}
-	fclose(fpL);
-	FILE* fpL2;
-	fpL2=fopen("C:\\Matlabfiles\\L8.txt","w");
-	for(int i=0;i<GoodPhotos.size();i++)
-	{
-	    fprintf(fpL2,"%lf\n",dvL(GoodPhotos[i],0));
-	}
-	fclose(fpL2);
+	fclose(fpBtStrips);
+	Floyed(coGraph,coDistance,NumOfImage);
+	int* Islandnote=new int [NumOfImage];
+	int IslandNum;
+	FindIsland(coGraph,coDistance,NumOfImage,Islandnote,&IslandNum);
 	cvWaitKey(0);
+}
+void Interior_Orientation(Camfiles* camfile,CorresPoint** CorresCoordinate,int* MatchNum,int NumOfCam,int NumOfImage,Camera* cams,int* ImageIndex,char** arr_Str1)
+{
+	//相片大小
+	IplImage* img;
+	int* Height=new int [NumOfImage];
+	int* Width=new int [NumOfImage];
+	for(int i=0;i<NumOfImage;i++)
+	{
+		sprintf(arr_Str1[i],"F:\\20151102\\visualize\\%08d.jpg",ImageIndex[i]-1);
+		img=cvLoadImage(arr_Str1[i]);
+		Width[i]=img->width;
+		Height[i]=img->height;
+		cvReleaseImage(&img);
+	}
+	//将像素坐标转化为像平面坐标系
+	char Interior_elementspath[1024];
+	FILE* fpInterior;
+	int suiyi1,suiyi2;
+	for(int i=0;i<NumOfCam;i++)
+	{
+		sprintf(Interior_elementspath,"F:\\Data\\oblique\\TopDC5相机参数\\TOPDC5Cam%d_7_24.cam",i+1);
+		fpInterior=fopen(Interior_elementspath,"r");
+		fscanf(fpInterior,"机身NO:%d\n",&suiyi1);
+		fscanf(fpInterior,"镜头NO:%d\n",&suiyi2);
+		fscanf(fpInterior,"cellsize(mm):%lf\n",&cams[i].cellsize);
+		fscanf(fpInterior,"f(mm):%lf\n",&cams[i].f);
+		fscanf(fpInterior,"像主点xp(mm):%lf\n",&cams[i].xp);
+		fscanf(fpInterior,"像主点yp(mm):%lf\n",&cams[i].yp);
+		fscanf(fpInterior,"像主点yp(mm):%lf\n",&cams[i].yp);
+		fscanf(fpInterior,"K1:%lf\n",&cams[i].k1);
+		fscanf(fpInterior,"K2:%lf\n",&cams[i].k2);
+		fscanf(fpInterior,"K3:%lf\n",&cams[i].k3);
+		fscanf(fpInterior,"P1:%lf\n",&cams[i].p1);
+		fscanf(fpInterior,"P2:%lf\n",&cams[i].p2);
+		fclose(fpInterior);
+	}
+	double swap;
+	double r;
+	double dx1,dy1,dx2,dy2;
+	for(int i=0;i<NumOfImage;i++)
+	{
+		for(int j=0;j<NumOfImage;j++)
+		{
+			for(int k=0;k<MatchNum[i*NumOfImage+j];k++)
+			{
+				if(CorresCoordinate[i*NumOfImage+j][k].x1!=-10000||CorresCoordinate[i*NumOfImage+j][k].y1!=-10000||CorresCoordinate[i*NumOfImage+j][k].x2!=-10000||CorresCoordinate[i*NumOfImage+j][k].y2!=-10000)
+				{
+					CorresCoordinate[i*NumOfImage+j][k].row1=CorresCoordinate[i*NumOfImage+j][k].x1;
+					CorresCoordinate[i*NumOfImage+j][k].col1=CorresCoordinate[i*NumOfImage+j][k].y1;
+					CorresCoordinate[i*NumOfImage+j][k].row2=CorresCoordinate[i*NumOfImage+j][k].x2;
+					CorresCoordinate[i*NumOfImage+j][k].col2=CorresCoordinate[i*NumOfImage+j][k].y2;
+					CorresCoordinate[i*NumOfImage+j][k].x1=(CorresCoordinate[i*NumOfImage+j][k].x1-Height[i]/2)*cams[camfile[i].CamIndex-1].cellsize;
+					CorresCoordinate[i*NumOfImage+j][k].y1=(CorresCoordinate[i*NumOfImage+j][k].y1-Width[i]/2)*cams[camfile[i].CamIndex-1].cellsize;
+					swap=CorresCoordinate[i*NumOfImage+j][k].y1;
+					CorresCoordinate[i*NumOfImage+j][k].y1=-CorresCoordinate[i*NumOfImage+j][k].x1;
+					CorresCoordinate[i*NumOfImage+j][k].x1=swap;
+					CorresCoordinate[i*NumOfImage+j][k].x1-=cams[camfile[i].CamIndex-1].xp;
+					CorresCoordinate[i*NumOfImage+j][k].y1-=cams[camfile[i].CamIndex-1].yp;
+					r=sqrt(pow(CorresCoordinate[i*NumOfImage+j][k].x1,2)+pow(CorresCoordinate[i*NumOfImage+j][k].y1,2));
+					dx1=cams[camfile[i].CamIndex-1].k1*CorresCoordinate[i*NumOfImage+j][k].x1*pow(r,2)+cams[camfile[i].CamIndex-1].k2*CorresCoordinate[i*NumOfImage+j][k].x1*pow(r,4)+cams[camfile[i].CamIndex-1].k3*CorresCoordinate[i*NumOfImage+j][k].x1*pow(r,6)+cams[camfile[i].CamIndex-1].p1*(r*r+2*pow(CorresCoordinate[i*NumOfImage+j][k].x1,2))+2*cams[camfile[i].CamIndex-1].p2*CorresCoordinate[i*NumOfImage+j][k].x1*CorresCoordinate[i*NumOfImage+j][k].y1;
+					dy1=cams[camfile[i].CamIndex-1].k1*CorresCoordinate[i*NumOfImage+j][k].y1*pow(r,2)+cams[camfile[i].CamIndex-1].k2*CorresCoordinate[i*NumOfImage+j][k].y1*pow(r,4)+cams[camfile[i].CamIndex-1].k3*CorresCoordinate[i*NumOfImage+j][k].y1*pow(r,6)+cams[camfile[i].CamIndex-1].p2*(r*r+2*pow(CorresCoordinate[i*NumOfImage+j][k].y1,2))+2*cams[camfile[i].CamIndex-1].p1*CorresCoordinate[i*NumOfImage+j][k].x1*CorresCoordinate[i*NumOfImage+j][k].y1;
+					CorresCoordinate[i*NumOfImage+j][k].x1+=dx1;
+					CorresCoordinate[i*NumOfImage+j][k].y1+=dy1;
+
+					CorresCoordinate[i*NumOfImage+j][k].x2=(CorresCoordinate[i*NumOfImage+j][k].x2-Height[j]/2)*cams[camfile[j].CamIndex-1].cellsize;
+					CorresCoordinate[i*NumOfImage+j][k].y2=(CorresCoordinate[i*NumOfImage+j][k].y2-Width[j]/2)*cams[camfile[j].CamIndex-1].cellsize;
+					swap=CorresCoordinate[i*NumOfImage+j][k].y2;
+					CorresCoordinate[i*NumOfImage+j][k].y2=-CorresCoordinate[i*NumOfImage+j][k].x2;
+					CorresCoordinate[i*NumOfImage+j][k].x2=swap;
+					CorresCoordinate[i*NumOfImage+j][k].x2-=cams[camfile[j].CamIndex-1].xp;
+					CorresCoordinate[i*NumOfImage+j][k].y2-=cams[camfile[j].CamIndex-1].yp;
+					r=sqrt(pow(CorresCoordinate[i*NumOfImage+j][k].x2,2)+pow(CorresCoordinate[i*NumOfImage+j][k].y2,2));
+					dx2=cams[camfile[j].CamIndex-1].k1*CorresCoordinate[i*NumOfImage+j][k].x2*pow(r,2)+cams[camfile[j].CamIndex-1].k2*CorresCoordinate[i*NumOfImage+j][k].x2*pow(r,4)+cams[camfile[j].CamIndex-1].k3*CorresCoordinate[i*NumOfImage+j][k].x2*pow(r,6)+cams[camfile[j].CamIndex-1].p1*(r*r+2*pow(CorresCoordinate[i*NumOfImage+j][k].x2,2))+2*cams[camfile[j].CamIndex-1].p2*CorresCoordinate[i*NumOfImage+j][k].x2*CorresCoordinate[i*NumOfImage+j][k].y2;
+					dy2=cams[camfile[j].CamIndex-1].k1*CorresCoordinate[i*NumOfImage+j][k].y2*pow(r,2)+cams[camfile[j].CamIndex-1].k2*CorresCoordinate[i*NumOfImage+j][k].y2*pow(r,4)+cams[camfile[j].CamIndex-1].k3*CorresCoordinate[i*NumOfImage+j][k].y2*pow(r,6)+cams[camfile[j].CamIndex-1].p2*(r*r+2*pow(CorresCoordinate[i*NumOfImage+j][k].y2,2))+2*cams[camfile[j].CamIndex-1].p1*CorresCoordinate[i*NumOfImage+j][k].x2*CorresCoordinate[i*NumOfImage+j][k].y2;
+					CorresCoordinate[i*NumOfImage+j][k].x2+=dx2;
+					CorresCoordinate[i*NumOfImage+j][k].y2+=dy2;
+				}
+			}
+		}
+	}
 }
 void Calculate_Matrix_R(CvMat* R,double fai,double omiga,double kappa)
 {
@@ -767,4 +1087,174 @@ void xyz2XYZ(CvMat* R,double x,double y,double z,double* pX,double* pY,double* p
 	*pZ=cvGetReal2D(mDst,2,0);
 	cvReleaseMat(&mSrc);
 	cvReleaseMat(&mDst); 
+}
+void Purify10000(CorresPoint** CorresCoordinate,int* MatchNum,int* RealMatchNum,int NumOfImage)
+{
+	CorresPoint* pPurePoints;
+	int countpt;
+	for(int i=0;i<NumOfImage;i++)
+	{
+		for(int j=0;j<NumOfImage;j++)
+		{
+			if(RealMatchNum[i*NumOfImage+j]==0)CorresCoordinate[i*NumOfImage+j]=NULL;
+			else
+			{
+				pPurePoints=new CorresPoint [RealMatchNum[i*NumOfImage+j]];
+				countpt=0;
+				for(int k=0;k<MatchNum[i*NumOfImage+j];k++)
+				{
+					if(CorresCoordinate[i*NumOfImage+j][k].x1!=-10000||CorresCoordinate[i*NumOfImage+j][k].y1!=-10000||CorresCoordinate[i*NumOfImage+j][k].x2!=-10000||CorresCoordinate[i*NumOfImage+j][k].y2!=-10000)
+					{
+						pPurePoints[countpt].x1=CorresCoordinate[i*NumOfImage+j][k].x1;
+						pPurePoints[countpt].y1=CorresCoordinate[i*NumOfImage+j][k].y1;
+						pPurePoints[countpt].x2=CorresCoordinate[i*NumOfImage+j][k].x2;
+						pPurePoints[countpt].y2=CorresCoordinate[i*NumOfImage+j][k].y2;
+						pPurePoints[countpt].col1=CorresCoordinate[i*NumOfImage+j][k].col1;
+						pPurePoints[countpt].row1=CorresCoordinate[i*NumOfImage+j][k].row1;
+						pPurePoints[countpt].col2=CorresCoordinate[i*NumOfImage+j][k].col2;
+						pPurePoints[countpt].row2=CorresCoordinate[i*NumOfImage+j][k].row2;
+						pPurePoints[countpt].index1=CorresCoordinate[i*NumOfImage+j][k].index1;
+						pPurePoints[countpt].index2=CorresCoordinate[i*NumOfImage+j][k].index2;
+						pPurePoints[countpt].value=CorresCoordinate[i*NumOfImage+j][k].value;
+						countpt++;
+					}
+				}
+				CorresCoordinate[i*NumOfImage+j]=pPurePoints;
+				if(countpt!=RealMatchNum[i*NumOfImage+j])
+				{
+					printf("不对呀！\n");
+				}
+			}
+		}
+	}
+}
+void Floyed(int* coGraph,int* coDistance,int NumOfImage)
+{
+	for(int k=0;k<NumOfImage;k++)
+	{
+		for(int i=0;i<NumOfImage;i++)
+		{
+			for(int j=0;j<NumOfImage;j++)
+			{
+				if(k==0)
+				{
+					if(coGraph[i*NumOfImage+j]==1)coDistance[i*NumOfImage+j]=1;
+				}
+				else
+				{
+					coDistance[i*NumOfImage+j]=MIN(coDistance[i*NumOfImage+j],coDistance[i*NumOfImage+k]+coDistance[k*NumOfImage+j]);
+				}
+			}
+		}
+	}
+}
+bool FindIsland(int* coGraph,int* coDistance,int NumOfImage,int* Islandnote,int *pIslandNum)
+{
+	bool flag=true;
+	FILE* fpGraph;
+	FILE* fpDistance;
+	*pIslandNum=0;
+	fpGraph=fopen("F:\\Graph.txt","w");
+	fpDistance=fopen("F:\\Distance.txt","w");
+	for(int i=0;i<NumOfImage;i++)
+	{
+		for(int j=0;j<NumOfImage;j++)
+		{
+			fprintf(fpGraph,"%6d",coGraph[i*NumOfImage+j]);
+			fprintf(fpDistance,"%6d",coDistance[i*NumOfImage+j]);
+		}
+		fprintf(fpGraph,"\n");
+		fprintf(fpDistance,"\n");
+	}
+	fclose(fpGraph);
+	fclose(fpDistance);
+	int sum;
+	for(int i=0;i<NumOfImage;i++)
+	{
+		sum=0;
+		for(int j=0;j<NumOfImage;j++)
+		{
+			sum+=coGraph[i*NumOfImage+j];
+		}
+		if(sum<2)
+		{
+			flag=false;
+			Islandnote[*pIslandNum]=i;
+			*pIslandNum=*pIslandNum+1;
+		}
+	}
+	for(int i=0;i<NumOfImage;i++)
+	{
+		for(int j=0;j<NumOfImage;j++)
+		{
+		    if(coDistance[i*NumOfImage+j]==MAXVALUE)
+		    {
+			    flag=false;
+			    Islandnote[*pIslandNum]=i;
+			    *pIslandNum=*pIslandNum+1;
+		    }
+		}
+	}
+	return flag;
+}
+void ObjectSpacePoint(int indexi,int indexj,int indexk,int value,int NumOfImage,CorresPoint** CorresCoordinate,int* MatchNum)
+{
+	if(CorresCoordinate[indexi*NumOfImage+indexj][indexk].value==-1)
+	{
+		CorresCoordinate[indexi*NumOfImage+indexj][indexk].value=value;
+		for(int i=0;i<NumOfImage;i++)
+		{
+			if(i!=indexi)
+			{
+				for(int k=0;k<MatchNum[i*NumOfImage+indexj];k++)
+				{
+					if(CorresCoordinate[i*NumOfImage+indexj][k].x1!=-10000||CorresCoordinate[i*NumOfImage+indexj][k].y1!=-10000||CorresCoordinate[i*NumOfImage+indexj][k].x2!=-10000||CorresCoordinate[i*NumOfImage+indexj][k].y2!=-10000)
+					{
+						if(CorresCoordinate[i*NumOfImage+indexj][k].index2==CorresCoordinate[indexi*NumOfImage+indexj][indexk].index2)
+							ObjectSpacePoint(i,indexj,k,value,NumOfImage,CorresCoordinate,MatchNum);
+					}
+				}
+			}
+		}
+		for(int i=0;i<NumOfImage;i++)
+		{
+			for(int k=0;k<MatchNum[indexj*NumOfImage+i];k++)
+			{
+				if(CorresCoordinate[indexj*NumOfImage+i][k].x1!=-10000||CorresCoordinate[indexj*NumOfImage+i][k].y1!=-10000||CorresCoordinate[indexj*NumOfImage+i][k].x2!=-10000||CorresCoordinate[indexj*NumOfImage+i][k].y2!=-10000)
+				{
+					if(CorresCoordinate[indexj*NumOfImage+i][k].index1==CorresCoordinate[indexi*NumOfImage+indexj][indexk].index2)
+						ObjectSpacePoint(indexj,i,k,value,NumOfImage,CorresCoordinate,MatchNum);
+				}
+			}
+		}
+		for(int j=0;j<NumOfImage;j++)
+		{
+			if(j!=indexj)
+			{
+				for(int k=0;k<MatchNum[indexi*NumOfImage+j];k++)
+				{
+					if(CorresCoordinate[indexi*NumOfImage+j][k].x1!=-10000||CorresCoordinate[indexi*NumOfImage+j][k].y1!=-10000||CorresCoordinate[indexi*NumOfImage+j][k].x2!=-10000||CorresCoordinate[indexi*NumOfImage+j][k].y2!=-10000)
+					{
+						if(CorresCoordinate[indexi*NumOfImage+j][k].index1==CorresCoordinate[indexi*NumOfImage+indexj][indexk].index1)
+							ObjectSpacePoint(indexi,j,k,value,NumOfImage,CorresCoordinate,MatchNum);
+					}
+				}
+			}
+		}
+		for(int j=0;j<NumOfImage;j++)
+		{
+			for(int k=0;k<MatchNum[j*NumOfImage+indexi];k++)
+			{
+				if(CorresCoordinate[j*NumOfImage+indexi][k].x1!=-10000||CorresCoordinate[j*NumOfImage+indexi][k].y1!=-10000||CorresCoordinate[j*NumOfImage+indexi][k].x2!=-10000||CorresCoordinate[j*NumOfImage+indexi][k].y2!=-10000)
+				{
+					if(CorresCoordinate[j*NumOfImage+indexi][k].index2==CorresCoordinate[indexi*NumOfImage+indexj][indexk].index1)
+						ObjectSpacePoint(j,indexi,k,value,NumOfImage,CorresCoordinate,MatchNum);
+				}
+			}
+		}
+	}
+	else if(CorresCoordinate[indexi*NumOfImage+indexj][indexk].value==value)
+		return;
+	else
+		printf("高桥君，怎么回事？\n");
 }
